@@ -1,0 +1,491 @@
+/* =====================================
+   DÉPÔT SARAH V2
+   Feuille de style principale
+===================================== */
+
+:root {
+    --primary: #14532d;
+    --primary-light: #166534;
+    --primary-dark: #052e16;
+    --background: #f1f5f9;
+    --white: #ffffff;
+    --text: #1e293b;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --success: #15803d;
+    --danger: #dc2626;
+    --warning: #d97706;
+    --radius: 12px;
+    --shadow: 0 3px 12px rgba(0, 0, 0, 0.07);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    background: var(--background);
+    color: var(--text);
+    line-height: 1.5;
+    min-height: 100vh;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+/* =====================================
+   CONNEXION
+===================================== */
+
+.login-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: linear-gradient(
+        135deg,
+        var(--primary-dark),
+        var(--primary-light)
+    );
+}
+
+.login-card {
+    background: var(--white);
+    width: 100%;
+    max-width: 430px;
+    padding: 30px 24px;
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+}
+
+.login-card h1 {
+    color: var(--primary);
+    text-align: center;
+    font-size: 27px;
+    margin-bottom: 5px;
+}
+
+.login-card > p {
+    text-align: center;
+    color: var(--muted);
+    margin-bottom: 22px;
+}
+
+.login-footer {
+    font-size: 12px;
+    margin-top: 20px;
+}
+
+#auth-message {
+    padding: 10px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+#auth-message:empty {
+    display: none;
+}
+
+/* =====================================
+   EN-TÊTE
+===================================== */
+
+.app-header {
+    background: var(--primary);
+    color: var(--white);
+    padding: 18px 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.app-header h1 {
+    font-size: 23px;
+}
+
+.app-header p {
+    font-size: 13px;
+    opacity: 0.85;
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 13px;
+}
+
+/* =====================================
+   NAVIGATION
+===================================== */
+
+.main-navigation {
+    display: flex;
+    gap: 8px;
+    padding: 12px 18px;
+    background: var(--white);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.nav-button {
+    background: #f1f5f9;
+    color: var(--text);
+    border: none;
+    border-radius: 9px;
+    padding: 11px 16px;
+    font-weight: bold;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.nav-button.active {
+    background: var(--primary);
+    color: var(--white);
+}
+
+/* =====================================
+   CONTENU
+===================================== */
+
+.main-content {
+    max-width: 1250px;
+    margin: 0 auto;
+    padding: 22px;
+}
+
+.page h2 {
+    color: var(--primary);
+    font-size: 25px;
+    margin-bottom: 6px;
+}
+
+.page > p {
+    color: var(--muted);
+    margin-bottom: 20px;
+}
+
+.page {
+    animation: appear 0.2s ease-in-out;
+}
+
+@keyframes appear {
+    from {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* =====================================
+   TABLEAU DE BORD
+===================================== */
+
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 15px;
+    margin: 22px 0;
+}
+
+.stat-card {
+    background: var(--white);
+    padding: 20px;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    border-left: 4px solid var(--primary-light);
+}
+
+.stat-card h3 {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 10px;
+}
+
+.stat-card strong {
+    font-size: 22px;
+    color: var(--primary);
+    overflow-wrap: anywhere;
+}
+
+/* =====================================
+   CARTES ET FORMULAIRES
+===================================== */
+
+.content-card {
+    background: var(--white);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: var(--shadow);
+}
+
+.content-card h3 {
+    color: var(--primary);
+    margin-bottom: 16px;
+    font-size: 18px;
+}
+
+form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+label {
+    font-size: 14px;
+    font-weight: bold;
+    margin-top: 5px;
+}
+
+input,
+select,
+textarea {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--white);
+    color: var(--text);
+    font-size: 15px;
+    outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: var(--primary-light);
+    box-shadow: 0 0 0 2px rgba(22, 101, 52, 0.12);
+}
+
+/* =====================================
+   BOUTONS
+===================================== */
+
+button {
+    font-family: inherit;
+}
+
+form button,
+#google-login,
+#show-register,
+#logout-button,
+.management-menu button {
+    border: none;
+    background: var(--primary-light);
+    color: var(--white);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    margin-top: 8px;
+}
+
+form button:hover,
+#google-login:hover,
+#show-register:hover,
+#logout-button:hover,
+.management-menu button:hover {
+    background: var(--primary-dark);
+}
+
+#google-login,
+#show-register {
+    width: 100%;
+}
+
+#show-register {
+    background: #475569;
+}
+
+#logout-button {
+    background: #b91c1c;
+    padding: 8px 12px;
+}
+
+/* =====================================
+   TABLEAUX
+===================================== */
+
+.table-container {
+    width: 100%;
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 550px;
+}
+
+th,
+td {
+    text-align: left;
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+
+th {
+    background: #f0fdf4;
+    color: var(--primary);
+}
+
+tbody tr:hover {
+    background: #f8fafc;
+}
+
+/* =====================================
+   MENU GESTION
+===================================== */
+
+.management-menu {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 20px 0;
+}
+
+.management-menu button {
+    min-height: 75px;
+    margin: 0;
+    padding: 14px 8px;
+}
+
+.management-section {
+    border-top: 4px solid var(--primary-light);
+}
+
+/* =====================================
+   ALERTES ET MESSAGES
+===================================== */
+
+.alert {
+    padding: 12px;
+    border-radius: 8px;
+    margin: 8px 0;
+    font-size: 14px;
+}
+
+.alert-success {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.alert-danger {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.alert-warning {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.empty-message {
+    color: var(--muted);
+    padding: 15px 0;
+    font-size: 14px;
+}
+
+/* =====================================
+   PIED DE PAGE
+===================================== */
+
+.app-footer {
+    text-align: center;
+    padding: 20px;
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 30px;
+    border-top: 1px solid var(--border);
+}
+
+/* =====================================
+   RESPONSIVE : TABLETTES
+===================================== */
+
+@media (max-width: 850px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .management-menu {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* =====================================
+   RESPONSIVE : TÉLÉPHONES
+===================================== */
+
+@media (max-width: 550px) {
+    .app-header {
+        padding: 15px;
+    }
+
+    .app-header h1 {
+        font-size: 20px;
+    }
+
+    .main-content {
+        padding: 14px;
+    }
+
+    .dashboard-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+
+    .stat-card {
+        padding: 14px 10px;
+    }
+
+    .stat-card h3 {
+        font-size: 11px;
+    }
+
+    .stat-card strong {
+        font-size: 17px;
+    }
+
+    .content-card {
+        padding: 15px;
+    }
+
+    .management-menu {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .nav-button {
+        padding: 10px 12px;
+        font-size: 12px;
+    }
+
+    .login-card {
+        padding: 25px 18px;
+    }
+}
+
+@media (max-width: 350px) {
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+}
