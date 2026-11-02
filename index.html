@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Dépôt Sarah - Gestion intelligente</title>
+
+    <meta name="description" content="Application de gestion des stocks, ventes et finances du dépôt Sarah.">
+
+    <meta name="theme-color" content="#14532d">
+
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <!-- ÉCRAN DE CONNEXION -->
+    <section id="login-screen" class="login-screen">
+        <div class="login-card">
+            <h1>🥤 Dépôt Sarah</h1>
+            <p>Gestion intelligente de votre dépôt</p>
+
+            <div id="auth-message"></div>
+
+            <form id="login-form">
+                <label for="login-email">Adresse e-mail</label>
+                <input
+                    type="email"
+                    id="login-email"
+                    placeholder="Votre adresse e-mail"
+                    required
+                >
+
+                <label for="login-password">Mot de passe</label>
+                <input
+                    type="password"
+                    id="login-password"
+                    placeholder="Votre mot de passe"
+                    required
+                >
+
+                <button type="submit">Se connecter</button>
+            </form>
+
+            <button id="google-login" type="button">
+                Continuer avec Google
+            </button>
+
+            <button id="show-register" type="button">
+                Créer un compte
+            </button>
+
+            <form id="register-form" hidden>
+                <h3>Créer un compte</h3>
+
+                <label for="register-name">Nom complet</label>
+                <input
+                    type="text"
+                    id="register-name"
+                    placeholder="Votre nom"
+                    required
+                >
+
+                <label for="register-email">Adresse e-mail</label>
+                <input
+                    type="email"
+                    id="register-email"
+                    placeholder="Votre adresse e-mail"
+                    required
+                >
+
+                <label for="register-password">Mot de passe</label>
+                <input
+                    type="password"
+                    id="register-password"
+                    placeholder="Minimum 6 caractères"
+                    minlength="6"
+                    required
+                >
+
+                <button type="submit">Envoyer ma demande</button>
+            </form>
+
+            <p class="login-footer">
+                Accès réservé aux utilisateurs autorisés.
+            </p>
+        </div>
+    </section>
+
+
+    <!-- APPLICATION PRINCIPALE -->
+    <div id="app-container" hidden>
+
+        <header class="app-header">
+            <div>
+                <h1>🥤 Dépôt Sarah</h1>
+                <p>Gestion intelligente de votre dépôt</p>
+            </div>
+
+            <div class="user-info">
+                <span id="current-user">Utilisateur</span>
+                <button id="logout-button" type="button">
+                    Déconnexion
+                </button>
+            </div>
+        </header>
+
+
+        <!-- MENU PRINCIPAL -->
+        <nav class="main-navigation">
+
+            <button class="nav-button active" data-page="dashboard">
+                🏠 Accueil
+            </button>
+
+            <button class="nav-button" data-page="stock">
+                📦 Stock
+            </button>
+
+            <button class="nav-button" data-page="sales">
+                💰 Ventes
+            </button>
+
+            <button class="nav-button" data-page="customers">
+                👥 Clients
+            </button>
+
+            <button class="nav-button" data-page="management">
+                📊 Gestion
+            </button>
+
+        </nav>
+
+
+        <main class="main-content">
+
+            <!-- ACCUEIL -->
+            <section id="dashboard" class="page active">
+
+                <h2>Tableau de bord</h2>
+                <p>Vue générale de votre dépôt.</p>
+
+                <div class="dashboard-grid">
+
+                    <article class="stat-card">
+                        <h3>Références</h3>
+                        <strong id="stat-products">0</strong>
+                    </article>
+
+                    <article class="stat-card">
+                        <h3>Bouteilles en stock</h3>
+                        <strong id="stat-stock">0</strong>
+                    </article>
+
+                    <article class="stat-card">
+                        <h3>Valeur du stock</h3>
+                        <strong id="stat-stock-cost">0 FCFA</strong>
+                    </article>
+
+                    <article class="stat-card">
+                        <h3>Ventes du jour</h3>
+                        <strong id="stat-sales">0 FCFA</strong>
+                    </article>
+
+                    <article class="stat-card">
+                        <h3>Bénéfice estimé</h3>
+                        <strong id="stat-profit">0 FCFA</strong>
+                    </article>
+
+                    <article class="stat-card">
+                        <h3>Dépenses du jour</h3>
+                        <strong id="stat-expenses">0 FCFA</strong>
+                    </article>
+
+                    <article class="stat-card">
+                        <h3>Crédits clients</h3>
+                        <strong id="stat-debts">0 FCFA</strong>
+                    </article>
+
+                </div>
+
+                <div class="content-card">
+                    <h3>Alertes de stock faible</h3>
+                    <div id="low-stock-alerts">
+                        Aucune alerte pour le moment.
+                    </div>
+                </div>
+
+            </section>
+
+
+            <!-- STOCK -->
+            <section id="stock" class="page" hidden>
+
+                <h2>Gestion du stock</h2>
+
+                <div class="content-card">
+                    <h3>Ajouter une boisson</h3>
+
+                    <form id="product-form">
+
+                        <label for="product-name">Nom de la boisson</label>
+                        <input
+                            type="text"
+                            id="product-name"
+                            placeholder="Exemple : Coca-Cola"
+                            required
+                        >
+
+                        <label for="product-brand">Marque et format</label>
+                        <input
+                            type="text"
+                            id="product-brand"
+                            placeholder="Exemple : 50 cl"
+                        >
+
+                        <label for="product-units">Bouteilles par casier</label>
+                        <input
+                            type="number"
+                            id="product-units"
+                            value="12"
+                            min="1"
+                            required
+                        >
+
+                        <label for="product-quantity">Stock initial (bouteilles)</label>
+                        <input
+                            type="number"
+                            id="product-quantity"
+                            min="0"
+                            value="0"
+                            required
+                        >
+
+                        <label for="product-cost">Prix d'achat par bouteille (FCFA)</label>
+                        <input
+                            type="number"
+                            id="product-cost"
+                            min="0"
+                            required
+                        >
+
+                        <label for="product-price">Prix de vente par bouteille (FCFA)</label>
+                        <input
+                            type="number"
+                            id="product-price"
+                            min="0"
+                            required
+                        >
+
+                        <label for="product-threshold">Seuil d'alerte (bouteilles)</label>
+                        <input
+                            type="number"
+                            id="product-threshold"
+                            min="0"
+                            value="12"
+                        >
+
+                        <button type="submit">Ajouter la boisson</button>
+
+                    </form>
+                </div>
+
+                <div class="content-card">
+                    <h3>Liste des boissons</h3>
+
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Boisson</th>
+                                    <th>Stock</th>
+                                    <th>Prix achat</th>
+                                    <th>Prix vente</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+
+                            <tbody id="products-table">
+                                <tr>
+                                    <td colspan="5">
+                                        Aucun produit enregistré.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="content-card">
+                    <h3>Approvisionnements</h3>
+                    <div id="purchases-list">
+                        Aucun approvisionnement enregistré.
+                    </div>
+                </div>
+
+            </section>
+
+
+            <!-- VENTES -->
+            <section id="sales" class="page" hidden>
+
+                <h2>Gestion des ventes</h2>
+
+                <div class="content-card">
+                    <h3>Enregistrer une vente</h3>
+
+                    <form id="sale-form">
+
+                        <label for="sale-product">Boisson</label>
+                        <select id="sale-product" required>
+                            <option value="">Choisir une boisson</option>
+                        </select>
+
+                        <label for="sale-customer">Client</label>
+                        <select id="sale-customer">
+                            <option value="">Client de passage</option>
+                        </select>
+
+                        <label for="sale-crates">Nombre de casiers</label>
+                        <input
+                            type="number"
+                            id="sale-crates"
+                            min="0"
+                            value="0"
+                        >
+
+                        <label for="sale-bottles">Bouteilles supplémentaires</label>
+                        <input
+                            type="number"
+                            id="sale-bottles"
+                            min="0"
+                            value="0"
+                        >
+
+                        <label for="sale-crate-price">Prix de vente par casier (FCFA)</label>
+                        <input
+                            type="number"
+                            id="sale-crate-price"
+                            min="0"
+                        >
+
+                        <label for="sale-bottle-price">Prix de vente par bouteille (FCFA)</label>
+                        <input
+                            type="number"
+                            id="sale-bottle-price"
+                            min="0"
+                        >
+
+                        <label for="sale-payment">Mode de paiement</label>
+                        <select id="sale-payment" required>
+                            <option value="cash">Espèces</option>
+                            <option value="orange-money">Orange Money</option>
+                            <option value="mtn-momo">MTN MoMo</option>
+                            <option value="other">Autre</option>
+                            <option value="credit">Crédit</option>
+                            <option value="partial">Paiement partiel</option>
+                        </select>
+
+                        <label for="sale-amount-paid">Montant payé (FCFA)</label>
+                        <input
+                            type="number"
+                            id="sale-amount-paid"
+                            min="0"
+                            value="0"
+                        >
+
+                        <button type="submit">Enregistrer la vente</button>
+
+                    </form>
+                </div>
+
+                <div class="content-card">
+                    <h3>Historique des ventes</h3>
+
+                    <div id="sales-history">
+                        Aucune vente enregistrée.
+                    </div>
+                </div>
+
+            </section>
+
+
+            <!-- CLIENTS -->
+            <section id="customers" class="page" hidden>
+
+                <h2>Gestion des clients</h2>
+
+                <div class="content-card">
+                    <h3>Ajouter un client</h3>
+
+                    <form id="customer-form">
+
+                        <label for="customer-name">Nom du client</label>
+                        <input
+                            type="text"
+                            id="customer-name"
+                            required
+                        >
+
+                        <label for="customer-phone">Téléphone</label>
+                        <input
+                            type="tel"
+                            id="customer-phone"
+                        >
+
+                        <button type="submit">Enregistrer le client</button>
+
+                    </form>
+                </div>
+
+                <div class="content-card">
+                    <h3>Liste des clients et crédits</h3>
+                    <div id="customers-list">
+                        Aucun client enregistré.
+                    </div>
+                </div>
+
+            </section>
+
+
+            <!-- GESTION -->
+            <section id="management" class="page" hidden>
+
+                <h2>Gestion du dépôt</h2>
+
+                <div class="management-menu">
+
+                    <button data-section="suppliers-section">
+                        🏭 Fournisseurs
+                    </button>
+
+                    <button data-section="purchases-section">
+                        🚚 Approvisionnements
+                    </button>
+
+                    <button data-section="expenses-section">
+                        💸 Dépenses
+                    </button>
+
+                    <button data-section="losses-section">
+                        ⚠️ Pertes et bouteilles cassées
+                    </button>
+
+                    <button data-section="cash-section">
+                        💵 Clôture de caisse
+                    </button>
+
+                    <button data-section="reports-section">
+                        📈 Rapports
+                    </button>
+
+                    <button data-section="users-section">
+                        👤 Utilisateurs
+                    </button>
+
+                    <button data-section="backup-section">
+                        💾 Sauvegarde
+                    </button>
+
+                </div>
+
+
+                <div id="suppliers-section" class="content-card management-section" hidden>
+                    <h3>Fournisseurs</h3>
+                    <div id="suppliers-list">Aucun fournisseur enregistré.</div>
+                </div>
+
+                <div id="purchases-section" class="content-card management-section" hidden>
+                    <h3>Approvisionnements</h3>
+                    <div id="management-purchases">Aucun approvisionnement enregistré.</div>
+                </div>
+
+                <div id="expenses-section" class="content-card management-section" hidden>
+                    <h3>Dépenses</h3>
+                    <div id="expenses-list">Aucune dépense enregistrée.</div>
+                </div>
+
+                <div id="losses-section" class="content-card management-section" hidden>
+                    <h3>Pertes et bouteilles cassées</h3>
+                    <div id="losses-list">Aucune perte enregistrée.</div>
+                </div>
+
+                <div id="cash-section" class="content-card management-section" hidden>
+                    <h3>Clôture de caisse</h3>
+                    <div id="cash-closures">Aucune clôture enregistrée.</div>
+                </div>
+
+                <div id="reports-section" class="content-card management-section" hidden>
+                    <h3>Rapports et statistiques</h3>
+                    <div id="reports-content">Les rapports seront disponibles ici.</div>
+                </div>
+
+                <div id="users-section" class="content-card management-section" hidden>
+                    <h3>Gestion des utilisateurs</h3>
+                    <div id="users-list">Chargement des utilisateurs...</div>
+                </div>
+
+                <div id="backup-section" class="content-card management-section" hidden>
+                    <h3>Sauvegarde et restauration</h3>
+                    <div id="backup-content">
+                        Les fonctions de sauvegarde seront disponibles ici.
+                    </div>
+                </div>
+
+            </section>
+
+        </main>
+
+
+        <footer class="app-footer">
+            <p>© 2026 Dépôt Sarah - Tous droits réservés.</p>
+            <p id="sync-status">Synchronisation en attente</p>
+        </footer>
+
+    </div>
+
+
+    <script type="module" src="app.js"></script>
+
+</body>
+</html>
