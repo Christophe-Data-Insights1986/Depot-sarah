@@ -489,3 +489,130 @@ tbody tr:hover {
         grid-template-columns: 1fr;
     }
 }
+/* =====================================
+   AMÉLIORATIONS DÉPÔT SARAH V2
+===================================== */
+
+/* Messages de connexion */
+.message {
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.message.success {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.message.error {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.message.info {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+/* Écran d'attente d'autorisation */
+#pending-access-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: linear-gradient(
+        135deg,
+        var(--primary-dark),
+        var(--primary-light)
+    );
+}
+
+#pending-access-screen .login-card {
+    text-align: center;
+}
+
+#pending-access-screen button {
+    width: 100%;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 15px;
+}
+
+/* Cartes des ventes et clients */
+.sale-card,
+.customer-card,
+.user-request-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--primary-light);
+    border-radius: 10px;
+    padding: 15px;
+    margin: 12px 0;
+    box-shadow: var(--shadow);
+}
+
+.sale-card h4,
+.customer-card h4,
+.user-request-card h4 {
+    color: var(--primary);
+    margin-bottom: 8px;
+}
+
+.sale-card p,
+.customer-card p,
+.user-request-card p {
+    font-size: 14px;
+    margin: 5px 0;
+}
+
+/* Boutons de validation des utilisateurs */
+.user-request-card button {
+    border: none;
+    padding: 10px 14px;
+    border-radius: 7px;
+    color: white;
+    font-weight: bold;
+    margin: 8px 5px 0 0;
+    cursor: pointer;
+}
+
+.user-request-card button[data-approve-user] {
+    background: var(--success);
+}
+
+.user-request-card button[data-deny-user] {
+    background: var(--danger);
+}
+
+/* Alertes de stock */
+.alert-item {
+    background: #fef3c7;
+    color: #92400e;
+    padding: 12px;
+    border-radius: 8px;
+    margin: 8px 0;
+    font-size: 14px;
+}
+
+/* Éléments désactivés */
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Adaptation des demandes d'accès */
+@media (max-width: 550px) {
+    #pending-access-screen {
+        padding: 15px;
+    }
+
+    .user-request-card button {
+        width: 100%;
+        margin: 6px 0;
+    }
+}
