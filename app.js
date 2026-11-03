@@ -1,12 +1,4 @@
-// ======================================================
-// DÉPÔT SARAH V2 — APPLICATION PRINCIPALE
-// ======================================================
-
-import {
-    auth,
-    db,
-    googleProvider
-} from "./firebase.js";
+import { auth, db, googleProvider } from "./firebase.js";
 
 import {
     signInWithEmailAndPassword,
@@ -23,9 +15,8 @@ import {
     setDoc,
     collection,
     getDocs,
-    query,
-    where,
-    onSnapshot
+    deleteDoc,
+    serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 import {
@@ -34,9 +25,6 @@ import {
     createSale,
     addCustomer,
     getCustomers,
-    recordCustomerPayment,
-    addExpense,
-    recordLoss,
     getAll
 } from "./database.js";
 
@@ -48,698 +36,754 @@ import {
 } from "./offline.js";
 
 
-// ======================================================
-// CONFIGURATION
-// ======================================================
+/* =====================================
+   CONFIGURATION GÉNÉRALE
+===================================== */
 
 const ADMIN_EMAIL = "christopheatangana2@gmail.com";
 
-const COLLECTIONS = {
-    products: "products",
-    sales: "sales",
-    customers: "customers",
-    expenses: "expenses",
-    losses: "losses",
-    suppliers: "suppliers",
-    purchases: "purchases",
-    userRequests: "userRequests",
-    authorizedUsers: "authorizedUsers"
-};
-
 let currentUser = null;
 let currentRole = null;
+
 let products = [];
 let customers = [];
 let sales = [];
 let expenses = [];
 let losses = [];
-let unsubscribeSales = null;
 
+const $ = (id) => document.getElementById(id);
 
-// ======================================================
-// OUTILS
-// ======================================================
+function showMessage(elementId, message, type = "error") {
+    const element = $(elementId);
 
-const $ = selector => document.querySelector(selector);
+    if (!element) return;
 
-const money = value =>
-    new Intl.NumberFormat("fr-FR").format(
+    element.textContent = message;
+    element.className = `message ${type}`;
+}
+
+function formatMoney(value) {
+    return new Intl.NumberFormat("fr-FR").format(
         Number(value || 0)
     ) + " FCFA";
-
-const number = value => Number(value || 0);
-
-function notify(message) {
-    alert(message);
 }
 
-function setMessage(message) {
-    const element = $("#auth-message");
+function localDate() {
+    const now = new Date();
 
-    if (element) {
-        element.textContent = message;
-    }
-}
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
 
-function setSyncStatus(message) {
-    const element = $("#sync-status");
-
-    if (element) {
-        element.textContent = message;
-    }
-}
-
-function today() {
-    return new Date().toISOString().slice(0, 10);
+    return `${year}-${month}-${day}`;
 }
 
 function escapeHTML(value) {
-    return String(value ?? "").replace(
-        /[&<>"']/g,
-        character => ({
+    return String(value ?? "").replace(/[&<>"']/g, (character) => {
+        const entities = {
             "&": "&amp;",
             "<": "&lt;",
             ">": "&gt;",
             '"': "&quot;",
             "'": "&#039;"
-        })[character]
-    );
-}
-
-
-// ======================================================
-// AFFICHAGE DES ÉCRANS
-// ======================================================
-
-function showLogin() {
-
-    const login = $("#login-screen");
-    const app = $("#app-container");
-
-    if (login) login.hidden = false;
-    if (app) app.hidden = true;
-}
-
-function showApplication() {
-
-    const login = $("#login-screen");
-    const app = $("#app-container");
-
-    if (login) login.hidden = true;
-    if (app) app.hidden = false;
-}
-
-
-// ======================================================
-// GESTION DES ACCÈS
-// ======================================================
-
-async function checkUserAccess(user) {
-
-    const userReference = doc(
-        db,
-        COLLECTIONS.authorizedUsers,
-        user.uid
-    );
-
-    const userSnapshot = await getDoc(userReference);
-
-    if (user.email?.toLowerCase() === ADMIN_EMAIL) {
-
-        await setDoc(userReference, {
-            uid: user.uid,
-            email: user.email,
-            name: user.displayName || "Administrateur",
-            role: "admin",
-            status: "approved",
-            updatedAt: new Date().toISOString()
-        }, { merge: true });
-
-        return {
-            approved: true,
-            role: "admin"
         };
-    }
 
-    if (!userSnapshot.exists()) {
+        return entities[character];
+    });
+}
 
-        const requestReference = doc(
-            db,
-            COLLECTIONS.userRequests,
-            user.uid
-        );
+function showElement(id) {
+    const element = $(id);
+    if (element) element.hidden = false;
+}
 
-        await setDoc(requestReference, {
-            uid: user.uid,
-            email: user.email,
-            name: user.displayName || "",
-            status: "pending",
-            requestedAt: new Date().toISOString()
-        }, { merge: true });
-
-        return {
-            approved: false,
-            role: null
-        };
-    }
-
-    const data = userSnapshot.data();
-
-    return {
-        approved: data.status === "approved",
-        role: data.role || "operator"
-    };
+function hideElement(id) {
+    const element = $(id);
+    if (element) element.hidden = true;
 }
 
 
-function showPendingAccess() {
+/* =====================================
+   ÉCRANS DE CONNEXION ET D'ACCÈS
+===================================== */
 
-    const container = $("#app-container");
+let pendingPanel = null;
 
-    if (!container) return;
+function createPendingPanel() {
+    if (pendingPanel) return;
 
-    container.innerHTML = `
+    pendingPanel = document.createElement("div");
+    pendingPanel.id = "pending-access-screen";
+
+    pendingPanel.innerHTML = `
         <div class="login-card">
             <h2>Demande d'accès envoyée</h2>
 
             <p>
                 Votre compte a été créé.
-                L'administrateur doit autoriser
-                votre accès au dépôt.
+                L'administrateur doit encore autoriser votre accès.
             </p>
 
             <p>
-                Vous pourrez utiliser l'application
-                après validation.
+                Vous pourrez utiliser le dépôt après validation.
             </p>
 
             <button id="pending-logout">
-                Déconnexion
+                Se déconnecter
             </button>
         </div>
     `;
 
-    container.hidden = false;
+    document.body.appendChild(pendingPanel);
 
-    $("#pending-logout")?.addEventListener(
-        "click",
-        () => signOut(auth)
-    );
+    $("pending-logout").addEventListener("click", async () => {
+        await signOut(auth);
+    });
+}
+
+function showPendingAccess() {
+    hideElement("login-screen");
+    hideElement("app-container");
+
+    createPendingPanel();
+    pendingPanel.hidden = false;
+}
+
+function hidePendingAccess() {
+    if (pendingPanel) {
+        pendingPanel.hidden = true;
+    }
+}
+
+function showLogin() {
+    hidePendingAccess();
+    showElement("login-screen");
+    hideElement("app-container");
+}
+
+function showApplication() {
+    hidePendingAccess();
+    hideElement("login-screen");
+    showElement("app-container");
 }
 
 
-// ======================================================
-// CONNEXION
-// ======================================================
+/* =====================================
+   CONNEXION PAR EMAIL
+===================================== */
 
-$("#login-form")?.addEventListener("submit", async event => {
+const loginForm = $("login-form");
 
-    event.preventDefault();
+if (loginForm) {
+    loginForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
 
-    const email = $("#login-email")?.value.trim();
-    const password = $("#login-password")?.value;
+        const email = $("login-email")?.value.trim();
+        const password = $("login-password")?.value;
 
-    try {
-
-        setMessage("Connexion en cours...");
-
-        await signInWithEmailAndPassword(
-            auth,
-            email,
-            password
-        );
-
-        setMessage("");
-
-    } catch (error) {
-
-        setMessage("Erreur : " + error.message);
-    }
-});
-
-
-// ======================================================
-// INSCRIPTION
-// ======================================================
-
-$("#show-register")?.addEventListener("click", () => {
-
-    const form = $("#register-form");
-
-    if (form) {
-        form.hidden = !form.hidden;
-    }
-});
-
-
-$("#register-form")?.addEventListener("submit", async event => {
-
-    event.preventDefault();
-
-    const name = $("#register-name")?.value.trim();
-    const email = $("#register-email")?.value.trim();
-    const password = $("#register-password")?.value;
-
-    try {
-
-        if (!name || !email || !password) {
-            throw new Error("Veuillez remplir tous les champs.");
+        if (!email || !password) {
+            showMessage("auth-message", "Remplissez tous les champs.");
+            return;
         }
 
-        setMessage("Création du compte...");
+        try {
+            showMessage("auth-message", "Connexion en cours...", "info");
 
-        const result = await createUserWithEmailAndPassword(
-            auth,
-            email,
-            password
-        );
+            await signInWithEmailAndPassword(
+                auth,
+                email,
+                password
+            );
 
-        await updateProfile(result.user, {
-            displayName: name
-        });
+        } catch (error) {
+            console.error(error);
 
-        setMessage(
-            "Compte créé. Demande d'accès en attente."
-        );
+            showMessage(
+                "auth-message",
+                "Connexion impossible. Vérifiez votre email et votre mot de passe."
+            );
+        }
+    });
+}
 
-    } catch (error) {
 
-        setMessage("Erreur : " + error.message);
+/* =====================================
+   INSCRIPTION
+===================================== */
+
+const registerForm = $("register-form");
+
+if (registerForm) {
+    registerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const name = $("register-name")?.value.trim();
+        const email = $("register-email")?.value.trim();
+        const password = $("register-password")?.value;
+
+        if (!name || !email || !password) {
+            showMessage("auth-message", "Remplissez tous les champs.");
+            return;
+        }
+
+        if (password.length < 6) {
+            showMessage(
+                "auth-message",
+                "Le mot de passe doit contenir au moins 6 caractères."
+            );
+            return;
+        }
+
+        try {
+            showMessage("auth-message", "Création du compte...", "info");
+
+            const credential = await createUserWithEmailAndPassword(
+                auth,
+                email,
+                password
+            );
+
+            await updateProfile(credential.user, {
+                displayName: name
+            });
+
+            await setDoc(
+                doc(db, "userRequests", credential.user.uid),
+                {
+                    uid: credential.user.uid,
+                    name,
+                    email,
+                    status: "pending",
+                    requestedAt: serverTimestamp()
+                },
+                { merge: true }
+            );
+
+            showMessage(
+                "auth-message",
+                "Compte créé. Votre demande attend l'autorisation de l'administrateur.",
+                "success"
+            );
+
+        } catch (error) {
+            console.error(error);
+
+            showMessage(
+                "auth-message",
+                "Impossible de créer le compte. Vérifiez les informations et les autorisations Firebase."
+            );
+        }
+    });
+}
+
+
+/* =====================================
+   AFFICHER LE FORMULAIRE D'INSCRIPTION
+===================================== */
+
+const showRegisterButton = $("show-register");
+
+if (showRegisterButton) {
+    showRegisterButton.addEventListener("click", () => {
+        if (loginForm) loginForm.hidden = true;
+        if (registerForm) registerForm.hidden = false;
+    });
+}
+
+
+/* =====================================
+   CONNEXION GOOGLE
+===================================== */
+
+const googleButton = $("google-login");
+
+if (googleButton) {
+    googleButton.addEventListener("click", async () => {
+        try {
+            showMessage("auth-message", "Connexion Google...", "info");
+
+            await signInWithPopup(auth, googleProvider);
+
+        } catch (error) {
+            console.error(error);
+
+            showMessage(
+                "auth-message",
+                "La connexion Google a échoué."
+            );
+        }
+    });
+}
+
+
+/* =====================================
+   DÉCONNEXION
+===================================== */
+
+const logoutButton = $("logout-button");
+
+if (logoutButton) {
+    logoutButton.addEventListener("click", async () => {
+        try {
+            await signOut(auth);
+        } catch (error) {
+            console.error(error);
+            alert("Erreur pendant la déconnexion.");
+        }
+    });
+}
+
+
+/* =====================================
+   VÉRIFICATION DES DROITS
+===================================== */
+
+async function checkUserAccess(user) {
+    const userRef = doc(db, "authorizedUsers", user.uid);
+
+    const userSnapshot = await getDoc(userRef);
+
+    // Administrateur principal
+    if (user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+
+        await setDoc(userRef, {
+            uid: user.uid,
+            name: user.displayName || "Administrateur",
+            email: user.email,
+            role: "admin",
+            status: "approved",
+            updatedAt: serverTimestamp()
+        }, { merge: true });
+
+        currentRole = "admin";
+
+        return true;
     }
-});
 
+    // Utilisateur déjà autorisé
+    if (userSnapshot.exists()) {
+        const userData = userSnapshot.data();
 
-// ======================================================
-// CONNEXION GOOGLE
-// ======================================================
-
-$("#google-login")?.addEventListener("click", async () => {
-
-    try {
-
-        setMessage("Connexion Google...");
-
-        await signInWithPopup(auth, googleProvider);
-
-        setMessage("");
-
-    } catch (error) {
-
-        setMessage("Erreur Google : " + error.message);
+        if (
+            userData.status === "approved" &&
+            ["admin", "operator"].includes(userData.role)
+        ) {
+            currentRole = userData.role;
+            return true;
+        }
     }
-});
+
+    // Demande d'accès en attente
+    await setDoc(
+        doc(db, "userRequests", user.uid),
+        {
+            uid: user.uid,
+            name: user.displayName || "",
+            email: user.email || "",
+            status: "pending",
+            requestedAt: serverTimestamp()
+        },
+        { merge: true }
+    );
+
+    return false;
+}
 
 
-// ======================================================
-// DÉCONNEXION
-// ======================================================
-
-$("#logout-button")?.addEventListener("click", async () => {
-
-    if (confirm("Voulez-vous vous déconnecter ?")) {
-        await signOut(auth);
-    }
-});
-
-
-// ======================================================
-// CHARGEMENT DES DONNÉES
-// ======================================================
+/* =====================================
+   CHARGEMENT DES DONNÉES
+===================================== */
 
 async function loadData() {
-
     try {
-
         products = await getProducts();
+
         customers = await getCustomers();
 
-        sales = await getAll(COLLECTIONS.sales);
-        expenses = await getAll(COLLECTIONS.expenses);
-        losses = await getAll(COLLECTIONS.losses);
+        sales = await getAll("sales");
+
+        expenses = await getAll("expenses");
+
+        losses = await getAll("losses");
 
         renderDashboard();
         renderProducts();
         renderCustomers();
         renderSales();
-
-        setSyncStatus(
-            isOnline()
-                ? "🟢 Connecté"
-                : "🔴 Hors connexion"
-        );
+        updateSaleProductOptions();
+        updateSaleCustomerOptions();
 
     } catch (error) {
+        console.error("Erreur de chargement :", error);
 
-        console.error("Chargement des données :", error);
-
-        notify(
-            "Impossible de charger les données. Vérifiez les autorisations Firebase."
+        alert(
+            "Impossible de charger les données. Vérifiez les règles Firestore et votre connexion Internet."
         );
     }
 }
 
 
-// ======================================================
-// TABLEAU DE BORD
-// ======================================================
+/* =====================================
+   TABLEAU DE BORD
+===================================== */
 
 function renderDashboard() {
+    const today = localDate();
 
-    const productCount = products.length;
+    const todaySales = sales.filter((sale) => {
+        return String(sale.createdAt || "").slice(0, 10) === today;
+    });
 
-    const stockCount = products.reduce(
-        (sum, product) =>
-            sum + number(product.quantity),
-        0
-    );
+    const todayExpenses = expenses.filter((expense) => {
+        return String(expense.createdAt || "").slice(0, 10) === today;
+    });
 
-    const stockCost = products.reduce(
-        (sum, product) =>
-            sum +
-            number(product.quantity) *
-            number(product.cost),
-        0
-    );
+    const totalProducts = products.length;
 
-    const todaySales = sales.filter(
-        sale => String(sale.createdAt || "").slice(0, 10) === today()
-    );
+    const totalStock = products.reduce((sum, product) => {
+        return sum + Number(product.quantity || 0);
+    }, 0);
 
-    const todayExpenses = expenses
-        .filter(expense =>
-            String(expense.createdAt || "").slice(0, 10) === today()
-        )
-        .reduce(
-            (sum, expense) =>
-                sum + number(expense.amount),
-            0
+    const stockCost = products.reduce((sum, product) => {
+        return sum +
+            Number(product.quantity || 0) *
+            Number(product.cost || 0);
+    }, 0);
+
+    const dailyRevenue = todaySales.reduce((sum, sale) => {
+        return sum + Number(sale.total || 0);
+    }, 0);
+
+    const dailyProfit = todaySales.reduce((sum, sale) => {
+        return sum + Number(sale.profit || 0);
+    }, 0);
+
+    const dailyExpenses = todayExpenses.reduce((sum, expense) => {
+        return sum + Number(expense.amount || 0);
+    }, 0);
+
+    const totalDebts = customers.reduce((sum, customer) => {
+        return sum + Number(customer.balance || 0);
+    }, 0);
+
+    if ($("stat-products")) {
+        $("stat-products").textContent = totalProducts;
+    }
+
+    if ($("stat-stock")) {
+        $("stat-stock").textContent = totalStock;
+    }
+
+    if ($("stat-stock-cost")) {
+        $("stat-stock-cost").textContent = formatMoney(stockCost);
+    }
+
+    if ($("stat-sales")) {
+        $("stat-sales").textContent = formatMoney(dailyRevenue);
+    }
+
+    if ($("stat-profit")) {
+        $("stat-profit").textContent = formatMoney(
+            dailyProfit - dailyExpenses
         );
+    }
 
-    const revenue = todaySales.reduce(
-        (sum, sale) =>
-            sum + number(sale.total),
-        0
-    );
+    if ($("stat-expenses")) {
+        $("stat-expenses").textContent = formatMoney(dailyExpenses);
+    }
 
-    const profit = todaySales.reduce(
-        (sum, sale) =>
-            sum + number(sale.profit),
-        0
-    );
+    if ($("stat-debts")) {
+        $("stat-debts").textContent = formatMoney(totalDebts);
+    }
 
-    const debts = customers.reduce(
-        (sum, customer) =>
-            sum + number(customer.balance),
-        0
-    );
-
-    if ($("#stat-products"))
-        $("#stat-products").textContent = productCount;
-
-    if ($("#stat-stock"))
-        $("#stat-stock").textContent = stockCount;
-
-    if ($("#stat-stock-cost"))
-        $("#stat-stock-cost").textContent = money(stockCost);
-
-    if ($("#stat-sales"))
-        $("#stat-sales").textContent = money(revenue);
-
-    if ($("#stat-profit"))
-        $("#stat-profit").textContent = money(profit);
-
-    if ($("#stat-expenses"))
-        $("#stat-expenses").textContent = money(todayExpenses);
-
-    if ($("#stat-debts"))
-        $("#stat-debts").textContent = money(debts);
-
-    renderLowStock();
+    renderLowStockAlerts();
 }
 
 
-// ======================================================
-// ALERTES DE STOCK
-// ======================================================
+/* =====================================
+   ALERTES DE STOCK
+===================================== */
 
-function renderLowStock() {
-
-    const container = $("#low-stock-alerts");
+function renderLowStockAlerts() {
+    const container = $("low-stock-alerts");
 
     if (!container) return;
 
-    const lowProducts = products.filter(product =>
-        number(product.quantity) <=
-        number(product.threshold)
-    );
+    const lowStock = products.filter((product) => {
+        return Number(product.quantity || 0) <=
+            Number(product.threshold || 12);
+    });
 
-    if (lowProducts.length === 0) {
-
-        container.innerHTML =
-            "<p>Aucune alerte de stock.</p>";
-
+    if (lowStock.length === 0) {
+        container.innerHTML = "<p>Aucune alerte de stock.</p>";
         return;
     }
 
-    container.innerHTML = lowProducts.map(product => `
+    container.innerHTML = lowStock.map((product) => `
         <div class="alert-item">
             ⚠️ ${escapeHTML(product.name)}
-            : ${number(product.quantity)} bouteilles restantes
+            : ${Number(product.quantity || 0)} bouteilles restantes
         </div>
     `).join("");
 }
 
 
-// ======================================================
-// AFFICHAGE DES PRODUITS
-// ======================================================
+/* =====================================
+   GESTION DES PRODUITS
+===================================== */
 
 function renderProducts() {
+    const table = $("products-table");
 
-    const container = $("#products-table");
-
-    if (!container) return;
+    if (!table) return;
 
     if (products.length === 0) {
-
-        container.innerHTML =
-            "<p>Aucun produit enregistré.</p>";
-
+        table.innerHTML = `
+            <tr>
+                <td colspan="5">Aucun produit enregistré.</td>
+            </tr>
+        `;
         return;
     }
 
-    container.innerHTML = `
-        <table>
-            <thead>
-                <tr>
-                    <th>Boisson</th>
-                    <th>Stock</th>
-                    <th>Coût</th>
-                    <th>Prix bouteille</th>
-                </tr>
-            </thead>
+    table.innerHTML = products.map((product) => `
+        <tr>
+            <td>${escapeHTML(product.name)}</td>
 
-            <tbody>
-                ${products.map(product => `
-                    <tr>
-                        <td>${escapeHTML(product.name)}</td>
-                        <td>${number(product.quantity)}</td>
-                        <td>${money(product.cost)}</td>
-                        <td>${money(product.price)}</td>
-                    </tr>
-                `).join("")}
-            </tbody>
-        </table>
-    `;
+            <td>
+                ${Number(product.quantity || 0)}
+            </td>
 
-    updateSaleProductOptions();
+            <td>
+                ${formatMoney(product.cost)}
+            </td>
+
+            <td>
+                ${formatMoney(product.price)}
+            </td>
+
+            <td>
+                ${Number(product.unitsPerCrate || 12)} / casier
+            </td>
+        </tr>
+    `).join("");
 }
 
 
-// ======================================================
-// AJOUTER UN PRODUIT
-// ======================================================
+const productForm = $("product-form");
 
-$("#product-form")?.addEventListener("submit", async event => {
+if (productForm) {
+    productForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
 
-    event.preventDefault();
-
-    try {
+        if (!currentUser) return;
 
         const product = {
-            name: $("#product-name").value.trim(),
-            brand: $("#product-brand").value.trim(),
-            unitsPerCrate: number($("#product-units").value) || 12,
-            quantity: number($("#product-quantity").value),
-            cost: number($("#product-cost").value),
-            price: number($("#product-price").value),
-            threshold: number($("#product-threshold").value),
-            createdAt: new Date().toISOString()
+            name: $("product-name")?.value.trim(),
+            brand: $("product-brand")?.value.trim(),
+            unitsPerCrate: Number($("product-units")?.value || 12),
+            quantity: Number($("product-quantity")?.value || 0),
+            cost: Number($("product-cost")?.value || 0),
+            price: Number($("product-price")?.value || 0),
+            threshold: Number($("product-threshold")?.value || 12),
+            active: true,
+            createdBy: currentUser.uid
         };
 
         if (!product.name) {
-            throw new Error("Le nom de la boisson est obligatoire.");
+            alert("Le nom du produit est obligatoire.");
+            return;
         }
 
-        if (product.quantity < 0 || product.cost < 0 || product.price < 0) {
-            throw new Error("Les valeurs ne peuvent pas être négatives.");
+        if (
+            product.quantity < 0 ||
+            product.cost < 0 ||
+            product.price < 0 ||
+            product.unitsPerCrate <= 0
+        ) {
+            alert("Vérifiez les quantités et les prix.");
+            return;
         }
 
-        await addProduct(product);
+        try {
+            await addProduct(product);
 
-        event.target.reset();
+            productForm.reset();
 
-        await loadData();
+            await loadData();
 
-        notify("Produit ajouté avec succès.");
+            alert("Produit enregistré avec succès.");
 
-    } catch (error) {
+        } catch (error) {
+            console.error(error);
+            alert("Impossible d'enregistrer le produit.");
+        }
+    });
+}
 
-        notify("Erreur : " + error.message);
-    }
-});
 
-
-// ======================================================
-// LISTE DES PRODUITS POUR LES VENTES
-// ======================================================
+/* =====================================
+   LISTE DES PRODUITS POUR LES VENTES
+===================================== */
 
 function updateSaleProductOptions() {
-
-    const select = $("#sale-product");
+    const select = $("sale-product");
 
     if (!select) return;
 
     select.innerHTML = `
         <option value="">Choisir une boisson</option>
-        ${products.map(product => `
-            <option value="${escapeHTML(product.id)}">
-                ${escapeHTML(product.name)}
-            </option>
-        `).join("")}
     `;
+
+    products.forEach((product) => {
+        const option = document.createElement("option");
+
+        option.value = product.id;
+
+        option.textContent =
+            `${product.name} (${product.quantity || 0} bouteilles)`;
+
+        select.appendChild(option);
+    });
 }
 
 
-// ======================================================
-// CLIENTS
-// ======================================================
+/* =====================================
+   LISTE DES CLIENTS POUR LES VENTES
+===================================== */
 
-function renderCustomers() {
+function updateSaleCustomerOptions() {
+    const select = $("sale-customer");
 
-    const container = $("#customers-list");
+    if (!select) return;
 
-    if (!container) return;
+    select.innerHTML = `
+        <option value="">Client de passage</option>
+    `;
 
-    if (customers.length === 0) {
+    customers.forEach((customer) => {
+        const option = document.createElement("option");
 
-        container.innerHTML =
-            "<p>Aucun client enregistré.</p>";
+        option.value = customer.id;
 
-        return;
-    }
+        option.textContent = customer.name;
 
-    container.innerHTML = customers.map(customer => `
-        <div class="customer-card">
-            <h3>${escapeHTML(customer.name)}</h3>
-
-            <p>Téléphone : ${escapeHTML(customer.phone || "-")}</p>
-
-            <p>Dette : ${money(customer.balance)}</p>
-        </div>
-    `).join("");
+        select.appendChild(option);
+    });
 }
 
 
-// ======================================================
-// AJOUTER UN CLIENT
-// ======================================================
+/* =====================================
+   PRÉREMPLIR LES PRIX D'UNE VENTE
+===================================== */
 
-$("#customer-form")?.addEventListener("submit", async event => {
+const saleProductSelect = $("sale-product");
 
-    event.preventDefault();
+if (saleProductSelect) {
+    saleProductSelect.addEventListener("change", () => {
+        const product = products.find((item) => {
+            return item.id === saleProductSelect.value;
+        });
 
-    try {
+        if (!product) return;
 
-        const customer = {
-            name: $("#customer-name").value.trim(),
-            phone: $("#customer-phone").value.trim(),
-            balance: 0,
-            createdAt: new Date().toISOString()
-        };
-
-        if (!customer.name) {
-            throw new Error("Le nom du client est obligatoire.");
+        if ($("sale-crate-price")) {
+            $("sale-crate-price").value =
+                Number(product.price || 0) *
+                Number(product.unitsPerCrate || 12);
         }
 
-        await addCustomer(customer);
-
-        event.target.reset();
-
-        await loadData();
-
-        notify("Client enregistré.");
-
-    } catch (error) {
-
-        notify("Erreur : " + error.message);
-    }
-});
+        if ($("sale-bottle-price")) {
+            $("sale-bottle-price").value =
+                Number(product.price || 0);
+        }
+    });
+}
 
 
-// ======================================================
-// VENTES
-// ======================================================
+/* =====================================
+   ENREGISTREMENT D'UNE VENTE
+===================================== */
 
-$("#sale-form")?.addEventListener("submit", async event => {
+const saleForm = $("sale-form");
 
-    event.preventDefault();
+if (saleForm) {
+    saleForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
 
-    try {
+        if (!currentUser) return;
 
-        const productId = $("#sale-product").value;
+        const productId = $("sale-product")?.value;
 
-        const product = products.find(
-            item => item.id === productId
-        );
+        const product = products.find((item) => {
+            return item.id === productId;
+        });
 
         if (!product) {
-            throw new Error("Veuillez choisir une boisson.");
+            alert("Choisissez une boisson.");
+            return;
         }
 
-        const crates = number($("#sale-crates").value);
-        const bottles = number($("#sale-bottles").value);
+        const crates = Number($("sale-crates")?.value || 0);
+        const bottles = Number($("sale-bottles")?.value || 0);
 
-        const cratePrice = number($("#sale-crate-price").value);
-        const bottlePrice = number($("#sale-bottle-price").value);
+        const units = Number(product.unitsPerCrate || 12);
 
-        const totalBottles =
-            crates * number(product.unitsPerCrate) + bottles;
+        const totalBottles = crates * units + bottles;
 
         if (totalBottles <= 0) {
-            throw new Error("La quantité vendue doit être positive.");
+            alert("Indiquez une quantité à vendre.");
+            return;
         }
 
-        if (totalBottles > number(product.quantity)) {
-            throw new Error("Stock insuffisant.");
+        if (totalBottles > Number(product.quantity || 0)) {
+            alert("Stock insuffisant pour cette vente.");
+            return;
         }
 
-        const customerId = $("#sale-customer").value || null;
+        const cratePrice = Number(
+            $("sale-crate-price")?.value ||
+            Number(product.price || 0) * units
+        );
 
-        const customer = customers.find(
-            item => item.id === customerId
+        const bottlePrice = Number(
+            $("sale-bottle-price")?.value ||
+            product.price ||
+            0
         );
 
         const total =
             crates * cratePrice +
             bottles * bottlePrice;
 
-        const amountPaid = number(
-            $("#sale-amount-paid").value
+        const paymentMethod = $("sale-payment")?.value || "cash";
+
+        const enteredAmount = Number(
+            $("sale-amount-paid")?.value || 0
         );
 
+        let amountPaid = enteredAmount;
+
+        if (paymentMethod === "credit") {
+            amountPaid = 0;
+        } else if (paymentMethod !== "partial" && enteredAmount === 0) {
+            amountPaid = total;
+        }
+
         if (amountPaid < 0 || amountPaid > total) {
-            throw new Error("Montant payé invalide.");
+            alert("Vérifiez le montant payé.");
+            return;
+        }
+
+        const customerId = $("sale-customer")?.value || null;
+
+        const customer = customers.find((item) => {
+            return item.id === customerId;
+        });
+
+        if (amountPaid < total && !customerId) {
+            alert("Une vente à crédit ou partiellement payée doit être associée à un client.");
+            return;
         }
 
         const sale = {
@@ -750,220 +794,507 @@ $("#sale-form")?.addEventListener("submit", async event => {
             crates,
             bottles,
             totalBottles,
+            quantity: totalBottles,
             cratePrice,
             bottlePrice,
             total,
             amountPaid,
             remaining: total - amountPaid,
-            paymentMethod: $("#sale-payment").value,
-            createdAt: new Date().toISOString()
+            paymentMethod,
+            userId: currentUser.uid
         };
 
-        const result = await createSale(sale);
+        try {
+            await createSale(sale);
 
-        event.target.reset();
+            saleForm.reset();
 
-        await loadData();
+            await loadData();
 
-        notify("Vente enregistrée avec succès.");
+            alert("Vente enregistrée avec succès.");
 
-    } catch (error) {
+        } catch (error) {
+            console.error(error);
 
-        notify("Erreur de vente : " + error.message);
-    }
-});
+            alert(
+                error.message || "Impossible d'enregistrer cette vente."
+            );
+        }
+    });
+}
 
 
-// ======================================================
-// HISTORIQUE DES VENTES
-// ======================================================
+/* =====================================
+   HISTORIQUE DES VENTES
+===================================== */
 
 function renderSales() {
-
-    const container = $("#sales-history");
+    const container = $("sales-history");
 
     if (!container) return;
 
     if (sales.length === 0) {
-
-        container.innerHTML =
-            "<p>Aucune vente enregistrée.</p>";
-
+        container.innerHTML = "<p>Aucune vente enregistrée.</p>";
         return;
     }
 
-    const sortedSales = [...sales].sort(
-        (a, b) =>
-            String(b.createdAt || "").localeCompare(
-                String(a.createdAt || "")
-            )
-    );
+    const sortedSales = [...sales].sort((a, b) => {
+        return String(b.createdAt || "").localeCompare(
+            String(a.createdAt || "")
+        );
+    });
 
-    container.innerHTML = sortedSales.map(sale => `
+    container.innerHTML = sortedSales.map((sale) => `
         <div class="sale-card">
+            <h4>${escapeHTML(sale.productName || "Boisson")}</h4>
 
-            <strong>${escapeHTML(sale.productName || "Boisson")}</strong>
+            <p>
+                Client :
+                ${escapeHTML(sale.customerName || "Client de passage")}
+            </p>
 
-            <p>Client : ${escapeHTML(sale.customerName || "Passage")}</p>
+            <p>
+                Quantité :
+                ${Number(sale.totalBottles || sale.quantity || 0)}
+                bouteilles
+            </p>
 
-            <p>Quantité : ${number(sale.totalBottles)} bouteilles</p>
+            <p>
+                Total :
+                ${formatMoney(sale.total)}
+            </p>
 
-            <p>Total : ${money(sale.total)}</p>
+            <p>
+                Payé :
+                ${formatMoney(sale.amountPaid)}
+            </p>
 
-            <p>Payé : ${money(sale.amountPaid)}</p>
+            <p>
+                Reste :
+                ${formatMoney(sale.remaining)}
+            </p>
 
-            <p>Reste : ${money(sale.remaining)}</p>
-
-            <small>${escapeHTML(sale.createdAt || "")}</small>
-
+            <p>
+                Date :
+                ${escapeHTML(
+                    String(sale.createdAt || "").slice(0, 16)
+                )}
+            </p>
         </div>
     `).join("");
 }
 
 
-// ======================================================
-// MENU DE NAVIGATION
-// ======================================================
+/* =====================================
+   GESTION DES CLIENTS
+===================================== */
 
-document.querySelectorAll("[data-page]").forEach(button => {
+function renderCustomers() {
+    const container = $("customers-list");
 
+    if (!container) return;
+
+    if (customers.length === 0) {
+        container.innerHTML = "<p>Aucun client enregistré.</p>";
+        return;
+    }
+
+    container.innerHTML = customers.map((customer) => `
+        <div class="customer-card">
+            <h4>${escapeHTML(customer.name)}</h4>
+
+            <p>
+                Téléphone :
+                ${escapeHTML(customer.phone || "Non renseigné")}
+            </p>
+
+            <p>
+                Solde restant :
+                ${formatMoney(customer.balance)}
+            </p>
+        </div>
+    `).join("");
+}
+
+
+const customerForm = $("customer-form");
+
+if (customerForm) {
+    customerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const name = $("customer-name")?.value.trim();
+        const phone = $("customer-phone")?.value.trim();
+
+        if (!name) {
+            alert("Le nom du client est obligatoire.");
+            return;
+        }
+
+        try {
+            await addCustomer({
+                name,
+                phone,
+                balance: 0,
+                createdBy: currentUser?.uid || null
+            });
+
+            customerForm.reset();
+
+            await loadData();
+
+            alert("Client enregistré avec succès.");
+
+        } catch (error) {
+            console.error(error);
+            alert("Impossible d'enregistrer le client.");
+        }
+    });
+}
+
+
+/* =====================================
+   GESTION DES MENUS PRINCIPAUX
+===================================== */
+
+document.querySelectorAll("[data-page]").forEach((button) => {
     button.addEventListener("click", () => {
+        const pageName = button.dataset.page;
 
-        const page = button.dataset.page;
+        document.querySelectorAll(".page").forEach((page) => {
+            page.classList.remove("active");
+            page.hidden = true;
+        });
 
-        document.querySelectorAll("[data-page]")
-            .forEach(item => item.classList.remove("active"));
+        const target = $(pageName);
+
+        if (target) {
+            target.hidden = false;
+            target.classList.add("active");
+        }
+
+        document.querySelectorAll("[data-page]").forEach((item) => {
+            item.classList.remove("active");
+        });
 
         button.classList.add("active");
-
-        document.querySelectorAll(".page")
-            .forEach(section => {
-                section.hidden = section.id !== page;
-            });
     });
 });
 
 
-// ======================================================
-// MENU GESTION
-// ======================================================
+/* =====================================
+   SOUS-MENUS DE GESTION
+===================================== */
 
-document.querySelectorAll("[data-section]").forEach(button => {
-
+document.querySelectorAll("[data-section]").forEach((button) => {
     button.addEventListener("click", () => {
-
         const sectionId = button.dataset.section;
 
-        document.querySelectorAll("[id$='-section']")
-            .forEach(section => {
-                section.hidden = section.id !== sectionId;
-            });
+        const section = $(sectionId);
+
+        if (!section) return;
+
+        section.hidden = !section.hidden;
     });
 });
 
 
-// ======================================================
-// CONNEXION ET INITIALISATION
-// ======================================================
+/* =====================================
+   GESTION DES UTILISATEURS
+===================================== */
 
-onAuthStateChanged(auth, async user => {
+async function renderUserRequests() {
+    const container = $("users-list");
 
+    if (!container || currentRole !== "admin") return;
+
+    try {
+        const snapshot = await getDocs(
+            collection(db, "userRequests")
+        );
+
+        const requests = snapshot.docs.map((item) => ({
+            id: item.id,
+            ...item.data()
+        }));
+
+        const pending = requests.filter((item) => {
+            return item.status === "pending";
+        });
+
+        if (pending.length === 0) {
+            container.innerHTML = "<p>Aucune demande en attente.</p>";
+            return;
+        }
+
+        container.innerHTML = pending.map((item) => `
+            <div class="user-request-card">
+                <h4>${escapeHTML(item.name || "Utilisateur")}</h4>
+
+                <p>${escapeHTML(item.email || "")}</p>
+
+                <button
+                    type="button"
+                    data-approve-user="${escapeHTML(item.uid)}">
+                    Autoriser
+                </button>
+
+                <button
+                    type="button"
+                    data-deny-user="${escapeHTML(item.uid)}">
+                    Refuser
+                </button>
+            </div>
+        `).join("");
+
+    } catch (error) {
+        console.error(error);
+
+        container.innerHTML = `
+            <p>Impossible de charger les demandes d'accès.</p>
+        `;
+    }
+}
+
+
+const usersList = $("users-list");
+
+if (usersList) {
+    usersList.addEventListener("click", async (event) => {
+        if (currentRole !== "admin") return;
+
+        const approveButton = event.target.closest("[data-approve-user]");
+        const denyButton = event.target.closest("[data-deny-user]");
+
+        if (approveButton) {
+            const uid = approveButton.dataset.approveUser;
+
+            try {
+                const requestRef = doc(db, "userRequests", uid);
+                const requestSnapshot = await getDoc(requestRef);
+
+                if (!requestSnapshot.exists()) {
+                    alert("Cette demande n'existe plus.");
+                    await renderUserRequests();
+                    return;
+                }
+
+                const userData = requestSnapshot.data();
+
+                await setDoc(doc(db, "authorizedUsers", uid), {
+                    uid,
+                    name: userData.name || "",
+                    email: userData.email || "",
+                    role: "operator",
+                    status: "approved",
+                    approvedBy: currentUser.uid,
+                    approvedAt: serverTimestamp()
+                });
+
+                await deleteDoc(requestRef);
+
+                alert("Utilisateur autorisé.");
+
+                await renderUserRequests();
+
+            } catch (error) {
+                console.error(error);
+                alert("Impossible d'autoriser cet utilisateur.");
+            }
+        }
+
+        if (denyButton) {
+            const uid = denyButton.dataset.denyUser;
+
+            if (!confirm("Voulez-vous vraiment refuser cette demande ?")) {
+                return;
+            }
+
+            try {
+                await setDoc(
+                    doc(db, "userRequests", uid),
+                    {
+                        status: "denied",
+                        deniedAt: serverTimestamp()
+                    },
+                    { merge: true }
+                );
+
+                alert("Demande refusée.");
+
+                await renderUserRequests();
+
+            } catch (error) {
+                console.error(error);
+                alert("Impossible de refuser cette demande.");
+            }
+        }
+    });
+}
+
+
+/* =====================================
+   AFFICHAGE DU NOM ET DU RÔLE
+===================================== */
+
+function displayUserInformation(user) {
+    const element = $("current-user");
+
+    if (!element) return;
+
+    const name = user.displayName || user.email || "Utilisateur";
+
+    const role = currentRole === "admin"
+        ? "Administrateur"
+        : "Opérateur";
+
+    element.textContent = `${name} — ${role}`;
+}
+
+
+/* =====================================
+   AFFICHAGE DU MENU UTILISATEURS
+===================================== */
+
+function configureRoleInterface() {
+    const usersButton = document.querySelector(
+        '[data-section="users-section"]'
+    );
+
+    if (usersButton) {
+        usersButton.hidden = currentRole !== "admin";
+    }
+
+    const usersSection = $("users-section");
+
+    if (usersSection && currentRole !== "admin") {
+        usersSection.hidden = true;
+    }
+}
+
+
+/* =====================================
+   ÉTAT DE LA CONNEXION INTERNET
+===================================== */
+
+function updateConnectionStatus(online) {
+    const element = $("sync-status");
+
+    if (!element) return;
+
+    element.textContent = online
+        ? "En ligne"
+        : "Hors connexion";
+}
+
+
+/* =====================================
+   INITIALISATION DE L'APPLICATION
+===================================== */
+
+async function initializeApplication(user) {
     currentUser = user;
 
-    if (!user) {
+    try {
+        const authorized = await checkUserAccess(user);
 
+        if (!authorized) {
+            showPendingAccess();
+            return;
+        }
+
+        showApplication();
+
+        displayUserInformation(user);
+
+        configureRoleInterface();
+
+        await loadData();
+
+        if (currentRole === "admin") {
+            await renderUserRequests();
+        }
+
+    } catch (error) {
+        console.error("Erreur d'autorisation :", error);
+
+        showLogin();
+
+        alert(
+            "Impossible de vérifier les autorisations. Vérifiez les règles de sécurité Firestore."
+        );
+    }
+}
+
+
+/* =====================================
+   SURVEILLANCE DE LA CONNEXION UTILISATEUR
+===================================== */
+
+onAuthStateChanged(auth, async (user) => {
+    if (user) {
+        await initializeApplication(user);
+    } else {
+        currentUser = null;
         currentRole = null;
 
         showLogin();
 
-        return;
-    }
-
-    try {
-
-        setSyncStatus("Vérification des autorisations...");
-
-        const access = await checkUserAccess(user);
-
-        if (!access.approved) {
-
-            showPendingAccess();
-
-            return;
+        if ($("current-user")) {
+            $("current-user").textContent = "";
         }
-
-        currentRole = access.role;
-
-        showApplication();
-
-        if ($("#current-user")) {
-            $("#current-user").textContent =
-                user.displayName || user.email;
-        }
-
-        if (currentRole !== "admin") {
-
-            document.querySelectorAll("[data-section='users-section']")
-                .forEach(button => button.hidden = true);
-        }
-
-        await openOfflineDB();
-
-        await loadData();
-
-        setSyncStatus(
-            isOnline()
-                ? "🟢 Connecté"
-                : "🔴 Hors connexion"
-        );
-
-    } catch (error) {
-
-        console.error("Initialisation :", error);
-
-        setSyncStatus("Erreur de vérification des accès.");
-
-        notify(
-            "Impossible de vérifier votre accès Firebase. Les règles de sécurité devront être configurées."
-        );
     }
 });
 
 
-// ======================================================
-// SURVEILLANCE DE LA CONNEXION
-// ======================================================
+/* =====================================
+   INITIALISATION HORS LIGNE
+===================================== */
 
-listenToConnection(async online => {
-
-    if (online) {
-
-        setSyncStatus("🟢 Internet disponible");
-
-    } else {
-
-        setSyncStatus("🔴 Mode hors connexion");
-    }
-
+async function initializeOfflineFeatures() {
     try {
+        await openOfflineDB();
 
         const pending = await countPendingOperations();
 
-        if (pending > 0) {
-            setSyncStatus(
-                `${online ? "🟢" : "🔴"} ${pending} opération(s) en attente`
-            );
-        }
+        console.log(
+            "Opérations en attente de synchronisation :",
+            pending
+        );
+
+        listenToConnection((online) => {
+            updateConnectionStatus(online);
+        });
+
+        updateConnectionStatus(isOnline());
 
     } catch (error) {
-
-        console.error(error);
+        console.error(
+            "Initialisation hors ligne impossible :",
+            error
+        );
     }
-});
+}
+
+initializeOfflineFeatures();
 
 
-// ======================================================
-// FIN DE L'APPLICATION
-// ======================================================
+/* =====================================
+   ENREGISTREMENT DU SERVICE WORKER
+===================================== */
 
-console.log("Dépôt Sarah V2 initialisé.");
+if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+        navigator.serviceWorker
+            .register("./service-worker.js")
+            .then(() => {
+                console.log("Service Worker enregistré.");
+            })
+            .catch((error) => {
+                console.error(
+                    "Erreur Service Worker :",
+                    error
+                );
+            });
+    });
+}
