@@ -1,7 +1,7 @@
-// ============================================
+// ==================================================
 // DÉPÔT SARAH V2
-// MOTEUR DE BASE DE DONNÉES FIRESTORE
-// ============================================
+// MOTEUR DE DONNÉES FIRESTORE
+// ==================================================
 
 import { db } from "./firebase.js";
 
@@ -10,20 +10,17 @@ import {
     doc,
     getDoc,
     getDocs,
-    addDoc,
     setDoc,
     updateDoc,
     deleteDoc,
-    query,
-    where,
-    orderBy,
     serverTimestamp,
     runTransaction
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
-// ============================================
-// COLLECTIONS
-// ============================================
+
+// ==================================================
+// COLLECTIONS FIRESTORE
+// ==================================================
 
 export const COLLECTIONS = {
     products: "products",
@@ -40,16 +37,22 @@ export const COLLECTIONS = {
     userRequests: "userRequests"
 };
 
-// ============================================
-// OUTILS GÉNÉRAUX
-// ============================================
 
-function collectionRef(name) {
-    return collection(db, name);
+// ==================================================
+// OUTILS
+// ==================================================
+
+function createId() {
+    if (crypto.randomUUID) {
+        return crypto.randomUUID();
+    }
+
+    return Date.now().toString(36) +
+        Math.random().toString(36).slice(2);
 }
 
-function documentRef(name, id) {
-    return doc(db, name, id);
+function ref(collectionName, id) {
+    return doc(db, collectionName, id);
 }
 
 function validateAmount(value, label = "Montant") {
@@ -65,23 +68,29 @@ function validateAmount(value, label = "Montant") {
 function validateQuantity(value, label = "Quantité") {
     const number = Number(value);
 
-    if (!Number.isSafeInteger(number) || number < 0) {
+    if (
+        !Number.isSafeInteger(number) ||
+        number < 0
+    ) {
         throw new Error(label + " invalide.");
     }
 
     return number;
 }
 
-function operationId() {
-    return crypto.randomUUID();
+function validateText(value) {
+    return String(value || "").trim();
 }
 
-// ============================================
+
+// ==================================================
 // LECTURE DES DONNÉES
-// ============================================
+// ==================================================
 
 export async function getAll(collectionName) {
-    const snapshot = await getDocs(collectionRef(collectionName));
+    const snapshot = await getDocs(
+        collection(db, collectionName)
+    );
 
     return snapshot.docs.map(item => ({
         id: item.id,
@@ -91,7 +100,7 @@ export async function getAll(collectionName) {
 
 export async function getById(collectionName, id) {
     const snapshot = await getDoc(
-        documentRef(collectionName, id)
+        ref(collectionName, id)
     );
 
     if (!snapshot.exists()) {
@@ -104,15 +113,16 @@ export async function getById(collectionName, id) {
     };
 }
 
-// ============================================
-// AJOUT D'UN DOCUMENT
-// ============================================
+
+// ==================================================
+// CRÉATION ET MODIFICATION GÉNÉRIQUES
+// ==================================================
 
 export async function createRecord(collectionName, data) {
-    const id = operationId();
+    const id = createId();
 
     await setDoc(
-        documentRef(collectionName, id),
+        ref(collectionName, id),
         {
             ...data,
             createdAt: serverTimestamp()
@@ -122,13 +132,9 @@ export async function createRecord(collectionName, data) {
     return id;
 }
 
-// ============================================
-// MODIFICATION D'UN DOCUMENT
-// ============================================
-
 export async function updateRecord(collectionName, id, data) {
     await updateDoc(
-        documentRef(collectionName, id),
+        ref(collectionName, id),
         {
             ...data,
             updatedAt: serverTimestamp()
@@ -136,58 +142,69 @@ export async function updateRecord(collectionName, id, data) {
     );
 }
 
-// ============================================
-// SUPPRESSION D'UN DOCUMENT
-// ============================================
-
 export async function removeRecord(collectionName, id) {
     await deleteDoc(
-        documentRef(collectionName, id)
+        ref(collectionName, id)
     );
 }
 
-// ============================================
+
+// ==================================================
 // PRODUITS
-// ============================================
+// ==================================================
 
 export async function addProduct(product) {
-    const units = validateQuantity(product.units ?? 12, "Unités par casier");
+
+    const name = validateText(product.name);
+
+    if (!name) {
+        throw new Error("Le nom du produit est obligatoire.");
+    }
+
+    const units = validateQuantity(
+        product.units ?? 12,
+        "Unités par casier"
+    );
 
     if (units < 1) {
-        throw new Error("Un casier doit contenir au moins une bouteille.");
+        throw new Error("Le casier doit contenir au moins une bouteille.");
     }
 
     const data = {
-        name: String(product.name || "").trim(),
-        brand: String(product.brand || "").trim(),
+        name,
+        brand: validateText(product.brand),
         units,
         qty: validateQuantity(product.qty ?? 0),
         cost: validateAmount(product.cost ?? 0, "Prix d'achat"),
         price: validateAmount(product.price ?? 0, "Prix de vente"),
-        threshold: validateQuantity(product.threshold ?? 12, "Seuil d'alerte"),
+        threshold: validateQuantity(
+            product.threshold ?? 12,
+            "Seuil d'alerte"
+        ),
         active: true
     };
 
-    if (!data.name) {
-        throw new Error("Le nom du produit est obligatoire.");
-    }
-
-    return await createRecord(COLLECTIONS.products, data);
+    return await createRecord(
+        COLLECTIONS.products,
+        data
+    );
 }
 
 export async function getProducts() {
     return await getAll(COLLECTIONS.products);
 }
 
-// ============================================
-// MOUVEMENTS DE STOCK
-// ============================================
 
-async function recordStockMovement(transaction, data) {
-    const id = operationId();
+// ==================================================
+// MOUVEMENTS DE STOCK
+// ==================================================
+
+function recordStockMovement(transaction, data) {
+
+    const id = createId();
 
     transaction.set(
-        documentRef(COLLECTIONS.stockMovements, id),
+        ref(COLLECTIONS.stockMovements, id),
         {
             ...data,
             createdAt: serverTimestamp()
@@ -197,19 +214,22 @@ async function recordStockMovement(transaction, data) {
     return id;
 }
 
-// ============================================
-// AJOUT DE STOCK
-// ============================================
+
+// ==================================================
+// APPROVISIONNEMENT SIMPLE
+// ==================================================
 
 export async function addStock(productId, quantity, details = {}) {
+
     quantity = validateQuantity(quantity);
 
-    if (quantity < 1) {
-        throw new Error("La quantité doit être supérieure à zéro.");
+    if (!productId || quantity < 1) {
+        throw new Error("Informations d'approvisionnement invalides.");
     }
 
     return await runTransaction(db, async transaction => {
-        const productRef = documentRef(
+
+        const productRef = ref(
             COLLECTIONS.products,
             productId
         );
@@ -221,19 +241,22 @@ export async function addStock(productId, quantity, details = {}) {
         }
 
         const product = snapshot.data();
-        const newQty = validateQuantity(product.qty) + quantity;
+
+        const previousQty = validateQuantity(product.qty);
+
+        const newQty = previousQty + quantity;
 
         transaction.update(productRef, {
             qty: newQty,
             updatedAt: serverTimestamp()
         });
 
-        await recordStockMovement(transaction, {
+        recordStockMovement(transaction, {
             productId,
             productName: product.name,
             type: "ENTREE",
             quantity,
-            previousQty: product.qty,
+            previousQty,
             newQty,
             reason: details.reason || "Approvisionnement",
             referenceId: details.referenceId || null,
@@ -244,15 +267,29 @@ export async function addStock(productId, quantity, details = {}) {
     });
 }
 
-// ============================================
-// VENTE ET DÉDUCTION DE STOCK
-// ============================================
+
+// ==================================================
+// ENREGISTREMENT D'UNE VENTE
+// ==================================================
 
 export async function createSale(sale) {
-    const productId = sale.productId;
 
-    const crates = validateQuantity(sale.crates ?? 0, "Casiers");
-    const bottles = validateQuantity(sale.bottles ?? 0, "Bouteilles");
+    const productId = sale.productId;
+    const customerId = sale.customerId || null;
+
+    if (!productId) {
+        throw new Error("Veuillez sélectionner une boisson.");
+    }
+
+    const crates = validateQuantity(
+        sale.crates ?? 0,
+        "Nombre de casiers"
+    );
+
+    const bottles = validateQuantity(
+        sale.bottles ?? 0,
+        "Nombre de bouteilles"
+    );
 
     const cratePrice = validateAmount(
         sale.cratePrice ?? 0,
@@ -269,15 +306,15 @@ export async function createSale(sale) {
         "Montant payé"
     );
 
-    if (!productId) {
-        throw new Error("Veuillez sélectionner une boisson.");
-    }
-
-    const saleId = operationId();
+    const saleId = createId();
 
     return await runTransaction(db, async transaction => {
 
-        const productRef = documentRef(
+        // ------------------------------------------
+        // 1. LIRE LES DOCUMENTS AVANT LES ÉCRITURES
+        // ------------------------------------------
+
+        const productRef = ref(
             COLLECTIONS.products,
             productId
         );
@@ -290,111 +327,182 @@ export async function createSale(sale) {
 
         const product = productSnapshot.data();
 
-        if (!product.active) {
+        let customerRef = null;
+        let customer = null;
+
+        if (customerId) {
+
+            customerRef = ref(
+                COLLECTIONS.customers,
+                customerId
+            );
+
+            const customerSnapshot = await transaction.get(
+                customerRef
+            );
+
+            if (!customerSnapshot.exists()) {
+                throw new Error("Client introuvable.");
+            }
+
+            customer = customerSnapshot.data();
+        }
+
+        // ------------------------------------------
+        // 2. VÉRIFIER LES INFORMATIONS
+        // ------------------------------------------
+
+        if (product.active === false) {
             throw new Error("Ce produit est désactivé.");
         }
 
-        const totalQuantity =
-            crates * validateQuantity(product.units) + bottles;
+        const units = validateQuantity(
+            product.units,
+            "Unités par casier"
+        );
 
-        if (totalQuantity < 1) {
-            throw new Error("La quantité vendue est invalide.");
+        if (units < 1) {
+            throw new Error("Format de casier invalide.");
         }
 
-        const currentStock = validateQuantity(product.qty);
+        const quantity = crates * units + bottles;
 
-        if (currentStock < totalQuantity) {
+        if (quantity < 1) {
+            throw new Error("La quantité vendue doit être positive.");
+        }
+
+        const previousQty = validateQuantity(product.qty);
+
+        if (previousQty < quantity) {
             throw new Error("Stock insuffisant pour cette vente.");
         }
 
+        // ------------------------------------------
+        // 3. CALCULER LA VENTE
+        // ------------------------------------------
+
         const total =
-            crates * cratePrice + bottles * bottlePrice;
+            crates * cratePrice +
+            bottles * bottlePrice;
+
+        if (total <= 0) {
+            throw new Error("Le montant de la vente doit être positif.");
+        }
 
         if (amountPaid > total) {
-            throw new Error("Le montant payé dépasse le total de la vente.");
+            throw new Error("Le paiement dépasse le montant de la vente.");
         }
 
         const remaining = total - amountPaid;
 
-        const profit =
-            total - totalQuantity * validateAmount(product.cost);
+        if (remaining > 0 && !customerId) {
+            throw new Error(
+                "En cas de paiement partiel ou à crédit, sélectionnez un client."
+            );
+        }
 
-        const newStock = currentStock - totalQuantity;
+        const cost = validateAmount(
+            product.cost,
+            "Prix d'achat"
+        );
+
+        const profit = total - quantity * cost;
+
+        const newQty = previousQty - quantity;
 
         const paymentStatus =
-            remaining === 0 ? "PAYE" :
-            amountPaid === 0 ? "CREDIT" :
-            "PARTIEL";
+            remaining === 0
+                ? "PAYE"
+                : amountPaid === 0
+                    ? "CREDIT"
+                    : "PARTIEL";
 
-        transaction.update(productRef, {
-            qty: newStock,
-            updatedAt: serverTimestamp()
-        });
+        const paymentMethod = sale.paymentMethod || "cash";
+
+        // ------------------------------------------
+        // 4. ENREGISTRER LA VENTE
+        // ------------------------------------------
 
         transaction.set(
-            documentRef(COLLECTIONS.sales, saleId),
+            ref(COLLECTIONS.sales, saleId),
             {
                 productId,
                 productName: product.name,
-                customerId: sale.customerId || null,
+                customerId,
                 crates,
                 bottles,
-                quantity: totalQuantity,
+                quantity,
                 cratePrice,
                 bottlePrice,
                 total,
                 amountPaid,
                 remaining,
                 paymentStatus,
-                paymentMethod: sale.paymentMethod || "cash",
+                paymentMethod,
                 estimatedProfit: profit,
-                createdAt: serverTimestamp(),
-                operationId: saleId
+                userId: sale.userId || null,
+                operationId: saleId,
+                createdAt: serverTimestamp()
             }
         );
 
-        await recordStockMovement(transaction, {
+        // ------------------------------------------
+        // 5. DÉDUIRE LE STOCK
+        // ------------------------------------------
+
+        transaction.update(productRef, {
+            qty: newQty,
+            updatedAt: serverTimestamp()
+        });
+
+        // ------------------------------------------
+        // 6. ENREGISTRER LE MOUVEMENT
+        // ------------------------------------------
+
+        recordStockMovement(transaction, {
             productId,
             productName: product.name,
             type: "VENTE",
-            quantity: -totalQuantity,
-            previousQty: currentStock,
-            newQty: newStock,
+            quantity: -quantity,
+            previousQty,
+            newQty,
             referenceId: saleId,
             reason: "Vente",
             userId: sale.userId || null
         });
 
-        if (remaining > 0 && sale.customerId) {
-            const customerRef = documentRef(
-                COLLECTIONS.customers,
-                sale.customerId
+        // ------------------------------------------
+        // 7. METTRE À JOUR LA DETTE DU CLIENT
+        // ------------------------------------------
+
+        if (remaining > 0) {
+
+            const oldBalance = validateAmount(
+                customer.balance ?? 0,
+                "Solde client"
             );
 
-            const customerSnapshot = await transaction.get(customerRef);
-
-            if (!customerSnapshot.exists()) {
-                throw new Error("Client introuvable.");
-            }
-
-            const customer = customerSnapshot.data();
-
             transaction.update(customerRef, {
-                balance: validateAmount(customer.balance ?? 0) + remaining,
+                balance: oldBalance + remaining,
                 updatedAt: serverTimestamp()
             });
         }
 
+        // ------------------------------------------
+        // 8. ENREGISTRER LE PAIEMENT
+        // ------------------------------------------
+
         if (amountPaid > 0) {
-            const paymentId = operationId();
+
+            const paymentId = createId();
 
             transaction.set(
-                documentRef(COLLECTIONS.payments, paymentId),
+                ref(COLLECTIONS.payments, paymentId),
                 {
                     saleId,
-                    customerId: sale.customerId || null,
+                    customerId,
                     amount: amountPaid,
-                    method: sale.paymentMethod || "cash",
+                    method: paymentMethod,
                     type: "PAIEMENT_VENTE",
                     createdAt: serverTimestamp()
                 }
@@ -407,53 +515,65 @@ export async function createSale(sale) {
             amountPaid,
             remaining,
             profit,
-            newStock,
+            newQty,
             paymentStatus
         };
     });
 }
 
-// ============================================
+
+// ==================================================
 // CLIENTS
-// ============================================
+// ==================================================
 
 export async function addCustomer(customer) {
-    const name = String(customer.name || "").trim();
+
+    const name = validateText(customer.name);
 
     if (!name) {
         throw new Error("Le nom du client est obligatoire.");
     }
 
-    return await createRecord(COLLECTIONS.customers, {
-        name,
-        phone: String(customer.phone || "").trim(),
-        balance: 0,
-        active: true
-    });
+    return await createRecord(
+        COLLECTIONS.customers,
+        {
+            name,
+            phone: validateText(customer.phone),
+            balance: 0,
+            active: true
+        }
+    );
 }
 
 export async function getCustomers() {
     return await getAll(COLLECTIONS.customers);
 }
 
-// ============================================
-// REMBOURSEMENT CLIENT
-// ============================================
+
+// ==================================================
+// REMBOURSEMENT D'UNE DETTE CLIENT
+// ==================================================
 
 export async function recordCustomerPayment(data) {
-    const amount = validateAmount(data.amount, "Montant du remboursement");
 
-    if (amount <= 0 || !data.customerId) {
+    const customerId = data.customerId;
+
+    const amount = validateAmount(
+        data.amount,
+        "Montant du remboursement"
+    );
+
+    if (!customerId || amount <= 0) {
         throw new Error("Informations de remboursement invalides.");
     }
 
-    const paymentId = operationId();
+    const paymentId = createId();
 
     return await runTransaction(db, async transaction => {
 
-        const customerRef = documentRef(
+        const customerRef = ref(
             COLLECTIONS.customers,
-            data.customerId
+            customerId
         );
 
         const snapshot = await transaction.get(customerRef);
@@ -463,21 +583,31 @@ export async function recordCustomerPayment(data) {
         }
 
         const customer = snapshot.data();
-        const balance = validateAmount(customer.balance ?? 0);
 
-        if (amount > balance) {
-            throw new Error("Le remboursement dépasse la dette du client.");
+        const balance = validateAmount(
+            customer.balance ?? 0,
+            "Dette du client"
+        );
+
+        if (balance <= 0) {
+            throw new Error("Ce client n'a aucune dette.");
         }
 
+        if (amount > balance) {
+            throw new Error("Le remboursement dépasse la dette.");
+        }
+
+        const remainingBalance = balance - amount;
+
         transaction.update(customerRef, {
-            balance: balance - amount,
+            balance: remainingBalance,
             updatedAt: serverTimestamp()
         });
 
         transaction.set(
-            documentRef(COLLECTIONS.payments, paymentId),
+            ref(COLLECTIONS.payments, paymentId),
             {
-                customerId: data.customerId,
+                customerId,
                 amount,
                 method: data.method || "cash",
                 type: "REMBOURSEMENT",
@@ -487,69 +617,90 @@ export async function recordCustomerPayment(data) {
 
         return {
             paymentId,
-            remainingBalance: balance - amount
+            remainingBalance
         };
     });
 }
 
-// ============================================
+
+// ==================================================
 // FOURNISSEURS
-// ============================================
+// ==================================================
 
 export async function addSupplier(supplier) {
-    const name = String(supplier.name || "").trim();
+
+    const name = validateText(supplier.name);
 
     if (!name) {
         throw new Error("Le nom du fournisseur est obligatoire.");
     }
 
-    return await createRecord(COLLECTIONS.suppliers, {
-        name,
-        phone: String(supplier.phone || "").trim(),
-        address: String(supplier.address || "").trim(),
-        contact: String(supplier.contact || "").trim(),
-        active: true
-    });
+    return await createRecord(
+        COLLECTIONS.suppliers,
+        {
+            name,
+            phone: validateText(supplier.phone),
+            address: validateText(supplier.address),
+            contact: validateText(supplier.contact),
+            active: true
+        }
+    );
 }
 
-// ============================================
+
+// ==================================================
 // DÉPENSES
-// ============================================
+// ==================================================
 
 export async function addExpense(expense) {
-    const amount = validateAmount(expense.amount, "Dépense");
+
+    const amount = validateAmount(
+        expense.amount,
+        "Montant de la dépense"
+    );
 
     if (amount <= 0) {
-        throw new Error("La dépense doit être supérieure à zéro.");
+        throw new Error("La dépense doit être positive.");
     }
 
-    return await createRecord(COLLECTIONS.expenses, {
-        category: expense.category || "Autre",
-        description: String(expense.description || "").trim(),
-        amount,
-        method: expense.method || "cash",
-        userId: expense.userId || null
-    });
+    return await createRecord(
+        COLLECTIONS.expenses,
+        {
+            category: expense.category || "Autre",
+            description: validateText(expense.description),
+            amount,
+            method: expense.method || "cash",
+            userId: expense.userId || null
+        }
+    );
 }
 
-// ============================================
+
+// ==================================================
 // PERTES ET BOUTEILLES CASSÉES
-// ============================================
+// ==================================================
 
 export async function recordLoss(data) {
-    const quantity = validateQuantity(data.quantity, "Quantité perdue");
 
-    if (!data.productId || quantity < 1) {
+    const productId = data.productId;
+
+    const quantity = validateQuantity(
+        data.quantity,
+        "Quantité perdue"
+    );
+
+    if (!productId || quantity < 1) {
         throw new Error("Informations de perte invalides.");
     }
 
-    const lossId = operationId();
+    const lossId = createId();
 
     return await runTransaction(db, async transaction => {
 
-        const productRef = documentRef(
+        // Lecture du produit
+        const productRef = ref(
             COLLECTIONS.products,
-            data.productId
+            productId
         );
 
         const snapshot = await transaction.get(productRef);
@@ -559,49 +710,62 @@ export async function recordLoss(data) {
         }
 
         const product = snapshot.data();
-        const currentStock = validateQuantity(product.qty);
 
-        if (currentStock < quantity) {
+        const previousQty = validateQuantity(product.qty);
+
+        if (previousQty < quantity) {
             throw new Error("Stock insuffisant pour enregistrer cette perte.");
         }
 
-        const newStock = currentStock - quantity;
+        const newQty = previousQty - quantity;
 
+        const cost = validateAmount(
+            product.cost,
+            "Prix d'achat"
+        );
+
+        // Mise à jour du stock
         transaction.update(productRef, {
-            qty: newStock,
+            qty: newQty,
             updatedAt: serverTimestamp()
         });
 
+        // Enregistrement de la perte
         transaction.set(
-            documentRef(COLLECTIONS.losses, lossId),
+            ref(COLLECTIONS.losses, lossId),
             {
-                productId: data.productId,
+                productId,
                 productName: product.name,
                 quantity,
                 reason: data.reason || "Autre",
-                financialValue: quantity * validateAmount(product.cost),
+                financialValue: quantity * cost,
+                userId: data.userId || null,
                 createdAt: serverTimestamp()
             }
         );
 
-        await recordStockMovement(transaction, {
-            productId: data.productId,
+        // Historique du mouvement
+        recordStockMovement(transaction, {
+            productId,
             productName: product.name,
             type: "PERTE",
             quantity: -quantity,
-            previousQty: currentStock,
+            previousQty,
             newQty,
             referenceId: lossId,
-            reason: data.reason || "Perte"
+            reason: data.reason || "Perte",
+            userId: data.userId || null
         });
 
         return {
             lossId,
-            newStock
+            previousQty,
+            newQty
         };
     });
 }
 
-// ============================================
-// FIN DU MODULE DATABASE
-// ============================================
+
+// ==================================================
+// FIN DU MOTEUR DE DONNÉES
+// ==================================================
