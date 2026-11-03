@@ -29,7 +29,9 @@ import {
     addSupplier,
     getSuppliers,
     updateRecord,
-    removeRecord
+    removeRecord,
+    createPurchase,
+    getPurchases
 } from "./database.js";
 
 import {
@@ -52,6 +54,7 @@ let sales = [];
 let expenses = [];
 let losses = [];
 let suppliers = [];
+let purchases = [];
 
 const $ = id => document.getElementById(id);
 
@@ -365,15 +368,19 @@ async function loadData() {
         expenses = await getAll("expenses");
         losses = await getAll("losses");
         suppliers = await getSuppliers();
+        purchases = await getPurchases();
 
         renderDashboard();
         renderProducts();
         renderCustomers();
         renderSales();
         renderSuppliers();
+        renderPurchases();
 
         updateSaleProductOptions();
         updateSaleCustomerOptions();
+        updatePurchaseProductOptions();
+        updatePurchaseSupplierOptions();
 
     } catch (error) {
         console.error(error);
@@ -550,7 +557,7 @@ if ($("product-form")) {
     });
 }
 
-/* LISTE DES BOISSONS */
+/* LISTE DES BOISSONS POUR LES VENTES */
 
 function updateSaleProductOptions() {
     const select = $("sale-product");
@@ -794,46 +801,37 @@ if ($("customer-form")) {
     });
 }
 
-/* ==================================
-   GESTION DES FOURNISSEURS
-================================== */
+/* FOURNISSEURS */
 
 function renderSuppliers() {
     const container = $("suppliers-list");
     if (!container) return;
 
     if (!suppliers.length) {
-        container.innerHTML = `
-            <p>Aucun fournisseur enregistré.</p>
-        `;
+        container.innerHTML = "<p>Aucun fournisseur enregistré.</p>";
     } else {
         container.innerHTML = suppliers.map(supplier => `
             <div class="supplier-card">
                 <h4>${escapeHTML(supplier.name)}</h4>
 
-                <p>
-                    Téléphone :
+                <p>Téléphone :
                     ${escapeHTML(supplier.phone || "Non renseigné")}
                 </p>
 
-                <p>
-                    Adresse :
+                <p>Adresse :
                     ${escapeHTML(supplier.address || "Non renseignée")}
                 </p>
 
-                <p>
-                    Contact :
+                <p>Contact :
                     ${escapeHTML(supplier.contact || "Non renseigné")}
                 </p>
 
-                <button
-                    type="button"
+                <button type="button"
                     data-edit-supplier="${escapeHTML(supplier.id)}">
                     Modifier
                 </button>
 
-                <button
-                    type="button"
+                <button type="button"
                     data-delete-supplier="${escapeHTML(supplier.id)}">
                     Supprimer
                 </button>
@@ -844,15 +842,12 @@ function renderSuppliers() {
     addSupplierFormIfNeeded();
 }
 
-/* CRÉATION DU FORMULAIRE FOURNISSEUR */
-
 function addSupplierFormIfNeeded() {
     const section = $("suppliers-section");
 
     if (!section || $("supplier-form")) return;
 
     const formContainer = document.createElement("div");
-
     formContainer.id = "supplier-form-container";
 
     formContainer.innerHTML = `
@@ -862,37 +857,22 @@ function addSupplierFormIfNeeded() {
             <form id="supplier-form">
 
                 <label for="supplier-name">Nom du fournisseur</label>
-                <input
-                    type="text"
-                    id="supplier-name"
-                    placeholder="Nom du fournisseur"
-                    required
-                >
+                <input type="text" id="supplier-name"
+                    placeholder="Nom du fournisseur" required>
 
                 <label for="supplier-phone">Téléphone</label>
-                <input
-                    type="tel"
-                    id="supplier-phone"
-                    placeholder="Numéro de téléphone"
-                >
+                <input type="tel" id="supplier-phone"
+                    placeholder="Numéro de téléphone">
 
                 <label for="supplier-address">Adresse</label>
-                <input
-                    type="text"
-                    id="supplier-address"
-                    placeholder="Adresse du fournisseur"
-                >
+                <input type="text" id="supplier-address"
+                    placeholder="Adresse du fournisseur">
 
                 <label for="supplier-contact">Personne à contacter</label>
-                <input
-                    type="text"
-                    id="supplier-contact"
-                    placeholder="Nom du contact"
-                >
+                <input type="text" id="supplier-contact"
+                    placeholder="Nom du contact">
 
-                <button type="submit">
-                    Enregistrer le fournisseur
-                </button>
+                <button type="submit">Enregistrer le fournisseur</button>
 
             </form>
         </div>
@@ -955,11 +935,7 @@ if ($("suppliers-list")) {
                 return;
             }
 
-            const name = prompt(
-                "Nom du fournisseur :",
-                supplier.name || ""
-            );
-
+            const name = prompt("Nom du fournisseur :", supplier.name || "");
             if (name === null) return;
 
             if (!name.trim()) {
@@ -967,18 +943,10 @@ if ($("suppliers-list")) {
                 return;
             }
 
-            const phone = prompt(
-                "Téléphone :",
-                supplier.phone || ""
-            );
-
+            const phone = prompt("Téléphone :", supplier.phone || "");
             if (phone === null) return;
 
-            const address = prompt(
-                "Adresse :",
-                supplier.address || ""
-            );
-
+            const address = prompt("Adresse :", supplier.address || "");
             if (address === null) return;
 
             const contact = prompt(
@@ -997,7 +965,6 @@ if ($("suppliers-list")) {
                 });
 
                 await loadData();
-
                 alert("Fournisseur modifié avec succès.");
 
             } catch (error) {
@@ -1017,15 +984,12 @@ if ($("suppliers-list")) {
 
             if (!confirm(
                 `Voulez-vous vraiment supprimer le fournisseur ${supplier.name} ?`
-            )) {
-                return;
-            }
+            )) return;
 
             try {
                 await removeRecord("suppliers", supplierId);
 
                 await loadData();
-
                 alert("Fournisseur supprimé.");
 
             } catch (error) {
@@ -1034,6 +998,418 @@ if ($("suppliers-list")) {
             }
         }
     });
+}
+
+/* =========================================
+   APPROVISIONNEMENTS
+========================================= */
+
+/* CRÉATION DU FORMULAIRE */
+
+function createPurchaseFormIfNeeded() {
+    const section = $("purchases-section");
+
+    if (!section || $("purchase-form")) return;
+
+    const formContainer = document.createElement("div");
+    formContainer.id = "purchase-form-container";
+
+    formContainer.innerHTML = `
+        <div class="content-card">
+
+            <h3>Enregistrer un approvisionnement</h3>
+
+            <form id="purchase-form">
+
+                <label for="purchase-supplier">
+                    Fournisseur
+                </label>
+
+                <select id="purchase-supplier" required>
+                    <option value="">Choisir un fournisseur</option>
+                </select>
+
+                <label for="purchase-product">
+                    Boisson
+                </label>
+
+                <select id="purchase-product" required>
+                    <option value="">Choisir une boisson</option>
+                </select>
+
+                <label for="purchase-crates">
+                    Nombre de casiers reçus
+                </label>
+
+                <input
+                    type="number"
+                    id="purchase-crates"
+                    min="0"
+                    value="0"
+                    required
+                >
+
+                <label for="purchase-bottles">
+                    Bouteilles supplémentaires
+                </label>
+
+                <input
+                    type="number"
+                    id="purchase-bottles"
+                    min="0"
+                    value="0"
+                    required
+                >
+
+                <label for="purchase-unit-cost">
+                    Prix d'achat par bouteille (FCFA)
+                </label>
+
+                <input
+                    type="number"
+                    id="purchase-unit-cost"
+                    min="1"
+                    required
+                >
+
+                <label for="purchase-note">
+                    Observation
+                </label>
+
+                <textarea
+                    id="purchase-note"
+                    placeholder="Informations complémentaires (facultatif)"
+                ></textarea>
+
+                <div class="purchase-total">
+                    <h3>Quantité totale reçue</h3>
+                    <strong id="purchase-quantity-preview">0 bouteille</strong>
+
+                    <h3>Coût total</h3>
+                    <strong id="purchase-total-preview">0 FCFA</strong>
+                </div>
+
+                <button type="submit">
+                    Enregistrer l'approvisionnement
+                </button>
+
+            </form>
+
+        </div>
+    `;
+
+    section.insertBefore(formContainer, $("management-purchases"));
+
+    updatePurchaseProductOptions();
+    updatePurchaseSupplierOptions();
+
+    const inputs = [
+        "purchase-product",
+        "purchase-crates",
+        "purchase-bottles",
+        "purchase-unit-cost"
+    ];
+
+    inputs.forEach(id => {
+        $(id).addEventListener("input", updatePurchasePreview);
+        $(id).addEventListener("change", updatePurchasePreview);
+    });
+
+    $("purchase-product").addEventListener("change", () => {
+        const product = products.find(item =>
+            item.id === $("purchase-product").value
+        );
+
+        if (product) {
+            $("purchase-unit-cost").value =
+                Number(product.cost || 0);
+        }
+
+        updatePurchasePreview();
+    });
+
+    $("purchase-form").addEventListener("submit", submitPurchase);
+}
+
+/* LISTE DES FOURNISSEURS */
+
+function updatePurchaseSupplierOptions() {
+    const select = $("purchase-supplier");
+    if (!select) return;
+
+    const previousValue = select.value;
+
+    select.innerHTML = `
+        <option value="">Choisir un fournisseur</option>
+    `;
+
+    suppliers
+        .filter(supplier => supplier.active !== false)
+        .forEach(supplier => {
+            const option = document.createElement("option");
+
+            option.value = supplier.id;
+            option.textContent = supplier.name;
+
+            select.appendChild(option);
+        });
+
+    if (suppliers.some(item => item.id === previousValue)) {
+        select.value = previousValue;
+    }
+}
+
+/* LISTE DES PRODUITS */
+
+function updatePurchaseProductOptions() {
+    const select = $("purchase-product");
+    if (!select) return;
+
+    const previousValue = select.value;
+
+    select.innerHTML = `
+        <option value="">Choisir une boisson</option>
+    `;
+
+    products
+        .filter(product => product.active !== false)
+        .forEach(product => {
+            const option = document.createElement("option");
+
+            option.value = product.id;
+            option.textContent =
+                `${product.name} (${product.quantity || 0} bouteilles)`;
+
+            select.appendChild(option);
+        });
+
+    if (products.some(item => item.id === previousValue)) {
+        select.value = previousValue;
+    }
+}
+
+/* CALCUL AUTOMATIQUE */
+
+function updatePurchasePreview() {
+    const product = products.find(item =>
+        item.id === $("purchase-product")?.value
+    );
+
+    const crates = Number($("purchase-crates")?.value || 0);
+    const bottles = Number($("purchase-bottles")?.value || 0);
+    const unitCost = Number($("purchase-unit-cost")?.value || 0);
+
+    const units = Number(product?.unitsPerCrate || 12);
+
+    const quantity = crates * units + bottles;
+    const total = quantity * unitCost;
+
+    if ($("purchase-quantity-preview")) {
+        $("purchase-quantity-preview").textContent =
+            `${quantity} bouteille(s)`;
+    }
+
+    if ($("purchase-total-preview")) {
+        $("purchase-total-preview").textContent =
+            formatMoney(total);
+    }
+}
+
+/* ENREGISTREMENT D'UN APPROVISIONNEMENT */
+
+async function submitPurchase(event) {
+    event.preventDefault();
+
+    if (!currentUser) {
+        alert("Vous devez être connecté.");
+        return;
+    }
+
+    const supplierId = $("purchase-supplier").value;
+    const productId = $("purchase-product").value;
+
+    const crates = Number($("purchase-crates").value || 0);
+    const bottles = Number($("purchase-bottles").value || 0);
+    const unitCost = Number($("purchase-unit-cost").value || 0);
+
+    const supplier = suppliers.find(item =>
+        item.id === supplierId
+    );
+
+    const product = products.find(item =>
+        item.id === productId
+    );
+
+    if (!supplier) {
+        alert("Sélectionnez un fournisseur valide.");
+        return;
+    }
+
+    if (!product) {
+        alert("Sélectionnez une boisson valide.");
+        return;
+    }
+
+    if (
+        !Number.isInteger(crates) ||
+        !Number.isInteger(bottles) ||
+        crates < 0 ||
+        bottles < 0 ||
+        (crates === 0 && bottles === 0)
+    ) {
+        alert("Indiquez une quantité valide.");
+        return;
+    }
+
+    if (!Number.isFinite(unitCost) || unitCost <= 0) {
+        alert("Le prix d'achat doit être supérieur à zéro.");
+        return;
+    }
+
+    const units = Number(product.unitsPerCrate || 12);
+    const quantity = crates * units + bottles;
+    const total = quantity * unitCost;
+
+    const confirmation = confirm(
+        `Confirmer cet approvisionnement ?\n\n` +
+        `Boisson : ${product.name}\n` +
+        `Fournisseur : ${supplier.name}\n` +
+        `Quantité : ${quantity} bouteilles\n` +
+        `Coût total : ${formatMoney(total)}`
+    );
+
+    if (!confirmation) return;
+
+    const purchase = {
+        productId,
+        supplierId,
+        crates,
+        bottles,
+        unitCost,
+        note: $("purchase-note").value.trim(),
+        userId: currentUser.uid
+    };
+
+    try {
+        const button = $("purchase-form").querySelector(
+            'button[type="submit"]'
+        );
+
+        button.disabled = true;
+        button.textContent = "Enregistrement en cours...";
+
+        await createPurchase(purchase);
+
+        $("purchase-form").reset();
+
+        await loadData();
+
+        updatePurchasePreview();
+
+        alert(
+            `Approvisionnement enregistré avec succès !\n\n` +
+            `${quantity} bouteilles ajoutées au stock.`
+        );
+
+    } catch (error) {
+        console.error(error);
+
+        alert(
+            error.message ||
+            "Impossible d'enregistrer cet approvisionnement."
+        );
+
+    } finally {
+        const button = $("purchase-form")?.querySelector(
+            'button[type="submit"]'
+        );
+
+        if (button) {
+            button.disabled = false;
+            button.textContent = "Enregistrer l'approvisionnement";
+        }
+    }
+}
+
+/* HISTORIQUE DES APPROVISIONNEMENTS */
+
+function renderPurchases() {
+    const containers = [
+        $("management-purchases"),
+        $("purchases-list")
+    ].filter(Boolean);
+
+    if (!containers.length) return;
+
+    if (!purchases.length) {
+        containers.forEach(container => {
+            container.innerHTML =
+                "<p>Aucun approvisionnement enregistré.</p>";
+        });
+
+        createPurchaseFormIfNeeded();
+        return;
+    }
+
+    const sorted = [...purchases].sort((a, b) =>
+        String(b.createdAt || "").localeCompare(
+            String(a.createdAt || "")
+        )
+    );
+
+    const html = sorted.map(purchase => `
+        <div class="purchase-card">
+
+            <h4>${escapeHTML(purchase.productName || "Boisson")}</h4>
+
+            <p>
+                Fournisseur :
+                ${escapeHTML(purchase.supplierName || "Non renseigné")}
+            </p>
+
+            <p>
+                Casiers :
+                ${Number(purchase.crates || 0)}
+            </p>
+
+            <p>
+                Bouteilles supplémentaires :
+                ${Number(purchase.bottles || 0)}
+            </p>
+
+            <p>
+                Quantité totale :
+                <strong>${Number(purchase.quantity || 0)} bouteilles</strong>
+            </p>
+
+            <p>
+                Prix d'achat par bouteille :
+                ${formatMoney(purchase.unitCost)}
+            </p>
+
+            <p>
+                Coût total :
+                <strong>${formatMoney(purchase.totalCost)}</strong>
+            </p>
+
+            <p>
+                Observation :
+                ${escapeHTML(purchase.note || "Aucune")}
+            </p>
+
+            <p>
+                Date :
+                ${escapeHTML(String(purchase.createdAt || "").slice(0, 16))}
+            </p>
+
+        </div>
+    `).join("");
+
+    containers.forEach(container => {
+        container.innerHTML = html;
+    });
+
+    createPurchaseFormIfNeeded();
 }
 
 /* NAVIGATION PRINCIPALE */
@@ -1070,6 +1446,16 @@ document.querySelectorAll("[data-section]").forEach(button => {
 
         if (section) {
             section.hidden = !section.hidden;
+
+            if (
+                button.dataset.section === "purchases-section" &&
+                !section.hidden
+            ) {
+                createPurchaseFormIfNeeded();
+                updatePurchaseProductOptions();
+                updatePurchaseSupplierOptions();
+                updatePurchasePreview();
+            }
         }
     });
 });
@@ -1103,14 +1489,12 @@ async function renderUserRequests() {
                 <h4>${escapeHTML(item.name || "Utilisateur")}</h4>
                 <p>${escapeHTML(item.email || "")}</p>
 
-                <button
-                    type="button"
+                <button type="button"
                     data-approve-user="${escapeHTML(item.uid)}">
                     Autoriser
                 </button>
 
-                <button
-                    type="button"
+                <button type="button"
                     data-deny-user="${escapeHTML(item.uid)}">
                     Refuser
                 </button>
