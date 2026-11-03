@@ -1,7 +1,6 @@
-// ==================================================
-// DÉPÔT SARAH V2
-// MOTEUR DE DONNÉES FIRESTORE
-// ==================================================
+// ======================================================
+// DÉPÔT SARAH V2 — MOTEUR DE DONNÉES
+// ======================================================
 
 import { db } from "./firebase.js";
 
@@ -18,9 +17,9 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 
-// ==================================================
-// COLLECTIONS FIRESTORE
-// ==================================================
+// ======================================================
+// COLLECTIONS
+// ======================================================
 
 export const COLLECTIONS = {
     products: "products",
@@ -38,13 +37,13 @@ export const COLLECTIONS = {
 };
 
 
-// ==================================================
+// ======================================================
 // OUTILS
-// ==================================================
+// ======================================================
 
 function createId() {
-    if (crypto.randomUUID) {
-        return crypto.randomUUID();
+    if (globalThis.crypto?.randomUUID) {
+        return globalThis.crypto.randomUUID();
     }
 
     return Date.now().toString(36) +
@@ -56,46 +55,93 @@ function ref(collectionName, id) {
 }
 
 function validateAmount(value, label = "Montant") {
-    const number = Number(value);
+    const result = Number(value);
 
-    if (!Number.isFinite(number) || number < 0) {
+    if (!Number.isFinite(result) || result < 0) {
         throw new Error(label + " invalide.");
     }
 
-    return number;
+    return result;
 }
 
 function validateQuantity(value, label = "Quantité") {
-    const number = Number(value);
+    const result = Number(value);
 
     if (
-        !Number.isSafeInteger(number) ||
-        number < 0
+        !Number.isSafeInteger(result) ||
+        result < 0
     ) {
         throw new Error(label + " invalide.");
     }
 
-    return number;
+    return result;
 }
 
 function validateText(value) {
-    return String(value || "").trim();
+    return String(value ?? "").trim();
+}
+
+function normalizeDate(value) {
+    if (!value) return new Date().toISOString();
+
+    if (typeof value === "string") return value;
+
+    if (value.toDate) {
+        return value.toDate().toISOString();
+    }
+
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+
+    return new Date().toISOString();
+}
+
+function normalizeRecord(snapshot) {
+    const data = snapshot.data();
+
+    const record = {
+        id: snapshot.id,
+        ...data
+    };
+
+    record.createdAt = normalizeDate(data.createdAt);
+
+    if (data.updatedAt) {
+        record.updatedAt = normalizeDate(data.updatedAt);
+    }
+
+    // Compatibilité avec app.js
+    if (data.qty !== undefined) {
+        record.quantity = data.qty;
+    }
+
+    if (data.units !== undefined) {
+        record.unitsPerCrate = data.units;
+    }
+
+    if (data.quantity !== undefined) {
+        record.totalBottles = data.quantity;
+    }
+
+    if (data.estimatedProfit !== undefined) {
+        record.profit = data.estimatedProfit;
+    }
+
+    return record;
 }
 
 
-// ==================================================
-// LECTURE DES DONNÉES
-// ==================================================
+// ======================================================
+// LECTURE
+// ======================================================
 
 export async function getAll(collectionName) {
     const snapshot = await getDocs(
         collection(db, collectionName)
     );
 
-    return snapshot.docs.map(item => ({
-        id: item.id,
-        ...item.data()
-    }));
+    return snapshot.docs.map(normalizeRecord);
 }
 
 export async function getById(collectionName, id) {
@@ -103,20 +149,15 @@ export async function getById(collectionName, id) {
         ref(collectionName, id)
     );
 
-    if (!snapshot.exists()) {
-        return null;
-    }
+    if (!snapshot.exists()) return null;
 
-    return {
-        id: snapshot.id,
-        ...snapshot.data()
-    };
+    return normalizeRecord(snapshot);
 }
 
 
-// ==================================================
-// CRÉATION ET MODIFICATION GÉNÉRIQUES
-// ==================================================
+// ======================================================
+// CRÉATION ET MODIFICATION
+// ======================================================
 
 export async function createRecord(collectionName, data) {
     const id = createId();
@@ -149,12 +190,11 @@ export async function removeRecord(collectionName, id) {
 }
 
 
-// ==================================================
+// ======================================================
 // PRODUITS
-// ==================================================
+// ======================================================
 
 export async function addProduct(product) {
-
     const name = validateText(product.name);
 
     if (!name) {
@@ -162,7 +202,7 @@ export async function addProduct(product) {
     }
 
     const units = validateQuantity(
-        product.units ?? 12,
+        product.units ?? product.unitsPerCrate ?? 12,
         "Unités par casier"
     );
 
@@ -170,11 +210,15 @@ export async function addProduct(product) {
         throw new Error("Le casier doit contenir au moins une bouteille.");
     }
 
+    const qty = validateQuantity(
+        product.qty ?? product.quantity ?? 0
+    );
+
     const data = {
         name,
         brand: validateText(product.brand),
         units,
-        qty: validateQuantity(product.qty ?? 0),
+        qty,
         cost: validateAmount(product.cost ?? 0, "Prix d'achat"),
         price: validateAmount(product.price ?? 0, "Prix de vente"),
         threshold: validateQuantity(
@@ -184,10 +228,28 @@ export async function addProduct(product) {
         active: true
     };
 
-    return await createRecord(
+    const id = await createRecord(
         COLLECTIONS.products,
         data
     );
+
+    // Enregistrer le stock initial dans l'historique
+    if (qty > 0) {
+        await createRecord(
+            COLLECTIONS.stockMovements,
+            {
+                productId: id,
+                productName: name,
+                type: "STOCK_INITIAL",
+                quantity: qty,
+                previousQty: 0,
+                newQty: qty,
+                reason: "Création du produit"
+            }
+        );
+    }
+
+    return id;
 }
 
 export async function getProducts() {
@@ -195,12 +257,11 @@ export async function getProducts() {
 }
 
 
-// ==================================================
+// ======================================================
 // MOUVEMENTS DE STOCK
-// ==================================================
+// ======================================================
 
 function recordStockMovement(transaction, data) {
-
     const id = createId();
 
     transaction.set(
@@ -215,20 +276,18 @@ function recordStockMovement(transaction, data) {
 }
 
 
-// ==================================================
-// APPROVISIONNEMENT SIMPLE
-// ==================================================
+// ======================================================
+// ENTRÉE DE STOCK
+// ======================================================
 
 export async function addStock(productId, quantity, details = {}) {
-
     quantity = validateQuantity(quantity);
 
     if (!productId || quantity < 1) {
-        throw new Error("Informations d'approvisionnement invalides.");
+        throw new Error("Approvisionnement invalide.");
     }
 
     return await runTransaction(db, async transaction => {
-
         const productRef = ref(
             COLLECTIONS.products,
             productId
@@ -243,7 +302,6 @@ export async function addStock(productId, quantity, details = {}) {
         const product = snapshot.data();
 
         const previousQty = validateQuantity(product.qty);
-
         const newQty = previousQty + quantity;
 
         transaction.update(productRef, {
@@ -268,12 +326,11 @@ export async function addStock(productId, quantity, details = {}) {
 }
 
 
-// ==================================================
-// ENREGISTREMENT D'UNE VENTE
-// ==================================================
+// ======================================================
+// VENTES
+// ======================================================
 
 export async function createSale(sale) {
-
     const productId = sale.productId;
     const customerId = sale.customerId || null;
 
@@ -281,15 +338,8 @@ export async function createSale(sale) {
         throw new Error("Veuillez sélectionner une boisson.");
     }
 
-    const crates = validateQuantity(
-        sale.crates ?? 0,
-        "Nombre de casiers"
-    );
-
-    const bottles = validateQuantity(
-        sale.bottles ?? 0,
-        "Nombre de bouteilles"
-    );
+    const crates = validateQuantity(sale.crates ?? 0);
+    const bottles = validateQuantity(sale.bottles ?? 0);
 
     const cratePrice = validateAmount(
         sale.cratePrice ?? 0,
@@ -309,11 +359,7 @@ export async function createSale(sale) {
     const saleId = createId();
 
     return await runTransaction(db, async transaction => {
-
-        // ------------------------------------------
-        // 1. LIRE LES DOCUMENTS AVANT LES ÉCRITURES
-        // ------------------------------------------
-
+        // LECTURES
         const productRef = ref(
             COLLECTIONS.products,
             productId
@@ -331,7 +377,6 @@ export async function createSale(sale) {
         let customer = null;
 
         if (customerId) {
-
             customerRef = ref(
                 COLLECTIONS.customers,
                 customerId
@@ -348,18 +393,12 @@ export async function createSale(sale) {
             customer = customerSnapshot.data();
         }
 
-        // ------------------------------------------
-        // 2. VÉRIFIER LES INFORMATIONS
-        // ------------------------------------------
-
+        // VÉRIFICATIONS
         if (product.active === false) {
-            throw new Error("Ce produit est désactivé.");
+            throw new Error("Produit désactivé.");
         }
 
-        const units = validateQuantity(
-            product.units,
-            "Unités par casier"
-        );
+        const units = validateQuantity(product.units);
 
         if (units < 1) {
             throw new Error("Format de casier invalide.");
@@ -368,25 +407,21 @@ export async function createSale(sale) {
         const quantity = crates * units + bottles;
 
         if (quantity < 1) {
-            throw new Error("La quantité vendue doit être positive.");
+            throw new Error("Quantité vendue invalide.");
         }
 
         const previousQty = validateQuantity(product.qty);
 
-        if (previousQty < quantity) {
-            throw new Error("Stock insuffisant pour cette vente.");
+        if (quantity > previousQty) {
+            throw new Error("Stock insuffisant.");
         }
-
-        // ------------------------------------------
-        // 3. CALCULER LA VENTE
-        // ------------------------------------------
 
         const total =
             crates * cratePrice +
             bottles * bottlePrice;
 
         if (total <= 0) {
-            throw new Error("Le montant de la vente doit être positif.");
+            throw new Error("Montant de vente invalide.");
         }
 
         if (amountPaid > total) {
@@ -397,16 +432,12 @@ export async function createSale(sale) {
 
         if (remaining > 0 && !customerId) {
             throw new Error(
-                "En cas de paiement partiel ou à crédit, sélectionnez un client."
+                "Sélectionnez un client pour enregistrer un crédit."
             );
         }
 
-        const cost = validateAmount(
-            product.cost,
-            "Prix d'achat"
-        );
-
-        const profit = total - quantity * cost;
+        const cost = validateAmount(product.cost);
+        const estimatedProfit = total - quantity * cost;
 
         const newQty = previousQty - quantity;
 
@@ -419,19 +450,20 @@ export async function createSale(sale) {
 
         const paymentMethod = sale.paymentMethod || "cash";
 
-        // ------------------------------------------
-        // 4. ENREGISTRER LA VENTE
-        // ------------------------------------------
-
+        // ÉCRITURE DE LA VENTE
         transaction.set(
             ref(COLLECTIONS.sales, saleId),
             {
                 productId,
                 productName: product.name,
                 customerId,
+                customerName: sale.customerName ||
+                    customer?.name ||
+                    "Client de passage",
                 crates,
                 bottles,
                 quantity,
+                totalBottles: quantity,
                 cratePrice,
                 bottlePrice,
                 total,
@@ -439,26 +471,21 @@ export async function createSale(sale) {
                 remaining,
                 paymentStatus,
                 paymentMethod,
-                estimatedProfit: profit,
+                estimatedProfit,
+                profit: estimatedProfit,
                 userId: sale.userId || null,
-                operationId: saleId,
+                operationId: sale.operationId || saleId,
                 createdAt: serverTimestamp()
             }
         );
 
-        // ------------------------------------------
-        // 5. DÉDUIRE LE STOCK
-        // ------------------------------------------
-
+        // DÉDUCTION DU STOCK
         transaction.update(productRef, {
             qty: newQty,
             updatedAt: serverTimestamp()
         });
 
-        // ------------------------------------------
-        // 6. ENREGISTRER LE MOUVEMENT
-        // ------------------------------------------
-
+        // HISTORIQUE DU STOCK
         recordStockMovement(transaction, {
             productId,
             productName: product.name,
@@ -471,15 +498,10 @@ export async function createSale(sale) {
             userId: sale.userId || null
         });
 
-        // ------------------------------------------
-        // 7. METTRE À JOUR LA DETTE DU CLIENT
-        // ------------------------------------------
-
+        // DETTE CLIENT
         if (remaining > 0) {
-
             const oldBalance = validateAmount(
-                customer.balance ?? 0,
-                "Solde client"
+                customer.balance ?? 0
             );
 
             transaction.update(customerRef, {
@@ -488,12 +510,8 @@ export async function createSale(sale) {
             });
         }
 
-        // ------------------------------------------
-        // 8. ENREGISTRER LE PAIEMENT
-        // ------------------------------------------
-
+        // PAIEMENT INITIAL
         if (amountPaid > 0) {
-
             const paymentId = createId();
 
             transaction.set(
@@ -514,7 +532,7 @@ export async function createSale(sale) {
             total,
             amountPaid,
             remaining,
-            profit,
+            profit: estimatedProfit,
             newQty,
             paymentStatus
         };
@@ -522,12 +540,11 @@ export async function createSale(sale) {
 }
 
 
-// ==================================================
+// ======================================================
 // CLIENTS
-// ==================================================
+// ======================================================
 
 export async function addCustomer(customer) {
-
     const name = validateText(customer.name);
 
     if (!name) {
@@ -550,12 +567,11 @@ export async function getCustomers() {
 }
 
 
-// ==================================================
-// REMBOURSEMENT D'UNE DETTE CLIENT
-// ==================================================
+// ======================================================
+// REMBOURSEMENTS CLIENTS
+// ======================================================
 
 export async function recordCustomerPayment(data) {
-
     const customerId = data.customerId;
 
     const amount = validateAmount(
@@ -564,13 +580,12 @@ export async function recordCustomerPayment(data) {
     );
 
     if (!customerId || amount <= 0) {
-        throw new Error("Informations de remboursement invalides.");
+        throw new Error("Remboursement invalide.");
     }
 
     const paymentId = createId();
 
     return await runTransaction(db, async transaction => {
-
         const customerRef = ref(
             COLLECTIONS.customers,
             customerId
@@ -585,16 +600,11 @@ export async function recordCustomerPayment(data) {
         const customer = snapshot.data();
 
         const balance = validateAmount(
-            customer.balance ?? 0,
-            "Dette du client"
+            customer.balance ?? 0
         );
 
-        if (balance <= 0) {
-            throw new Error("Ce client n'a aucune dette.");
-        }
-
-        if (amount > balance) {
-            throw new Error("Le remboursement dépasse la dette.");
+        if (balance <= 0 || amount > balance) {
+            throw new Error("Montant supérieur à la dette.");
         }
 
         const remainingBalance = balance - amount;
@@ -623,16 +633,15 @@ export async function recordCustomerPayment(data) {
 }
 
 
-// ==================================================
+// ======================================================
 // FOURNISSEURS
-// ==================================================
+// ======================================================
 
 export async function addSupplier(supplier) {
-
     const name = validateText(supplier.name);
 
     if (!name) {
-        throw new Error("Le nom du fournisseur est obligatoire.");
+        throw new Error("Nom du fournisseur obligatoire.");
     }
 
     return await createRecord(
@@ -647,13 +656,16 @@ export async function addSupplier(supplier) {
     );
 }
 
+export async function getSuppliers() {
+    return await getAll(COLLECTIONS.suppliers);
+}
 
-// ==================================================
+
+// ======================================================
 // DÉPENSES
-// ==================================================
+// ======================================================
 
 export async function addExpense(expense) {
-
     const amount = validateAmount(
         expense.amount,
         "Montant de la dépense"
@@ -676,12 +688,11 @@ export async function addExpense(expense) {
 }
 
 
-// ==================================================
-// PERTES ET BOUTEILLES CASSÉES
-// ==================================================
+// ======================================================
+// PERTES
+// ======================================================
 
 export async function recordLoss(data) {
-
     const productId = data.productId;
 
     const quantity = validateQuantity(
@@ -696,8 +707,6 @@ export async function recordLoss(data) {
     const lossId = createId();
 
     return await runTransaction(db, async transaction => {
-
-        // Lecture du produit
         const productRef = ref(
             COLLECTIONS.products,
             productId
@@ -713,24 +722,19 @@ export async function recordLoss(data) {
 
         const previousQty = validateQuantity(product.qty);
 
-        if (previousQty < quantity) {
-            throw new Error("Stock insuffisant pour enregistrer cette perte.");
+        if (quantity > previousQty) {
+            throw new Error("Stock insuffisant.");
         }
 
         const newQty = previousQty - quantity;
 
-        const cost = validateAmount(
-            product.cost,
-            "Prix d'achat"
-        );
+        const cost = validateAmount(product.cost);
 
-        // Mise à jour du stock
         transaction.update(productRef, {
             qty: newQty,
             updatedAt: serverTimestamp()
         });
 
-        // Enregistrement de la perte
         transaction.set(
             ref(COLLECTIONS.losses, lossId),
             {
@@ -744,7 +748,6 @@ export async function recordLoss(data) {
             }
         );
 
-        // Historique du mouvement
         recordStockMovement(transaction, {
             productId,
             productName: product.name,
@@ -766,6 +769,6 @@ export async function recordLoss(data) {
 }
 
 
-// ==================================================
-// FIN DU MOTEUR DE DONNÉES
-// ==================================================
+// ======================================================
+// FIN DU MOTEUR
+// ======================================================
