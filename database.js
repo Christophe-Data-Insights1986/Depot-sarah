@@ -16,7 +16,6 @@ import {
     runTransaction
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
-
 // ======================================================
 // COLLECTIONS
 // ======================================================
@@ -35,7 +34,6 @@ export const COLLECTIONS = {
     authorizedUsers: "authorizedUsers",
     userRequests: "userRequests"
 };
-
 
 // ======================================================
 // OUTILS
@@ -131,7 +129,6 @@ function normalizeRecord(snapshot) {
     return record;
 }
 
-
 // ======================================================
 // LECTURE
 // ======================================================
@@ -153,7 +150,6 @@ export async function getById(collectionName, id) {
 
     return normalizeRecord(snapshot);
 }
-
 
 // ======================================================
 // CRÉATION ET MODIFICATION
@@ -188,7 +184,6 @@ export async function removeRecord(collectionName, id) {
         ref(collectionName, id)
     );
 }
-
 
 // ======================================================
 // PRODUITS
@@ -256,7 +251,6 @@ export async function getProducts() {
     return await getAll(COLLECTIONS.products);
 }
 
-
 // ======================================================
 // MOUVEMENTS DE STOCK
 // ======================================================
@@ -275,9 +269,8 @@ function recordStockMovement(transaction, data) {
     return id;
 }
 
-
 // ======================================================
-// ENTRÉE DE STOCK
+// ENTRÉE DE STOCK SIMPLE
 // ======================================================
 
 export async function addStock(productId, quantity, details = {}) {
@@ -325,6 +318,162 @@ export async function addStock(productId, quantity, details = {}) {
     });
 }
 
+// ======================================================
+// APPROVISIONNEMENTS AVEC FOURNISSEUR
+// ======================================================
+
+export async function createPurchase(purchase) {
+    const productId = purchase.productId;
+    const supplierId = purchase.supplierId;
+
+    if (!productId) {
+        throw new Error("Veuillez sélectionner une boisson.");
+    }
+
+    if (!supplierId) {
+        throw new Error("Veuillez sélectionner un fournisseur.");
+    }
+
+    const crates = validateQuantity(
+        purchase.crates ?? 0,
+        "Nombre de casiers"
+    );
+
+    const bottles = validateQuantity(
+        purchase.bottles ?? 0,
+        "Nombre de bouteilles"
+    );
+
+    const purchaseId = createId();
+
+    return await runTransaction(db, async transaction => {
+
+        // Lecture du produit
+        const productRef = ref(
+            COLLECTIONS.products,
+            productId
+        );
+
+        const productSnapshot = await transaction.get(productRef);
+
+        if (!productSnapshot.exists()) {
+            throw new Error("Produit introuvable.");
+        }
+
+        // Lecture du fournisseur
+        const supplierRef = ref(
+            COLLECTIONS.suppliers,
+            supplierId
+        );
+
+        const supplierSnapshot = await transaction.get(supplierRef);
+
+        if (!supplierSnapshot.exists()) {
+            throw new Error("Fournisseur introuvable.");
+        }
+
+        const product = productSnapshot.data();
+        const supplier = supplierSnapshot.data();
+
+        if (product.active === false) {
+            throw new Error("Ce produit est désactivé.");
+        }
+
+        if (supplier.active === false) {
+            throw new Error("Ce fournisseur est désactivé.");
+        }
+
+        // Vérification du format
+        const units = validateQuantity(product.units);
+
+        if (units < 1) {
+            throw new Error("Format de casier invalide.");
+        }
+
+        // Calcul de la quantité achetée
+        const quantity = crates * units + bottles;
+
+        if (!Number.isSafeInteger(quantity) || quantity < 1) {
+            throw new Error("Quantité achetée invalide.");
+        }
+
+        // Coût d'achat par bouteille
+        const unitCost = validateAmount(
+            purchase.unitCost ?? product.cost,
+            "Coût par bouteille"
+        );
+
+        if (unitCost <= 0) {
+            throw new Error("Le coût d'achat doit être positif.");
+        }
+
+        const totalCost = quantity * unitCost;
+
+        // Calcul du nouveau stock
+        const previousQty = validateQuantity(product.qty);
+        const newQty = previousQty + quantity;
+
+        if (!Number.isSafeInteger(newQty)) {
+            throw new Error("Le stock calculé est trop élevé.");
+        }
+
+        // Enregistrement de l'approvisionnement
+        transaction.set(
+            ref(COLLECTIONS.purchases, purchaseId),
+            {
+                productId,
+                productName: product.name,
+                supplierId,
+                supplierName: supplier.name,
+                crates,
+                bottles,
+                unitsPerCrate: units,
+                quantity,
+                unitCost,
+                totalCost,
+                userId: purchase.userId || null,
+                note: validateText(purchase.note),
+                createdAt: serverTimestamp()
+            }
+        );
+
+        // Mise à jour automatique du stock
+        transaction.update(productRef, {
+            qty: newQty,
+            cost: unitCost,
+            updatedAt: serverTimestamp()
+        });
+
+        // Historique du mouvement de stock
+        recordStockMovement(transaction, {
+            productId,
+            productName: product.name,
+            type: "APPROVISIONNEMENT",
+            quantity,
+            previousQty,
+            newQty,
+            referenceId: purchaseId,
+            reason: "Approvisionnement auprès de " + supplier.name,
+            userId: purchase.userId || null
+        });
+
+        return {
+            purchaseId,
+            quantity,
+            totalCost,
+            previousQty,
+            newQty
+        };
+    });
+}
+
+// ======================================================
+// HISTORIQUE DES APPROVISIONNEMENTS
+// ======================================================
+
+export async function getPurchases() {
+    return await getAll(COLLECTIONS.purchases);
+}
 
 // ======================================================
 // VENTES
@@ -359,6 +508,7 @@ export async function createSale(sale) {
     const saleId = createId();
 
     return await runTransaction(db, async transaction => {
+
         // LECTURES
         const productRef = ref(
             COLLECTIONS.products,
@@ -406,7 +556,7 @@ export async function createSale(sale) {
 
         const quantity = crates * units + bottles;
 
-        if (quantity < 1) {
+        if (!Number.isSafeInteger(quantity) || quantity < 1) {
             throw new Error("Quantité vendue invalide.");
         }
 
@@ -539,7 +689,6 @@ export async function createSale(sale) {
     });
 }
 
-
 // ======================================================
 // CLIENTS
 // ======================================================
@@ -565,7 +714,6 @@ export async function addCustomer(customer) {
 export async function getCustomers() {
     return await getAll(COLLECTIONS.customers);
 }
-
 
 // ======================================================
 // REMBOURSEMENTS CLIENTS
@@ -632,7 +780,6 @@ export async function recordCustomerPayment(data) {
     });
 }
 
-
 // ======================================================
 // FOURNISSEURS
 // ======================================================
@@ -660,7 +807,6 @@ export async function getSuppliers() {
     return await getAll(COLLECTIONS.suppliers);
 }
 
-
 // ======================================================
 // DÉPENSES
 // ======================================================
@@ -686,7 +832,6 @@ export async function addExpense(expense) {
         }
     );
 }
-
 
 // ======================================================
 // PERTES
@@ -767,7 +912,6 @@ export async function recordLoss(data) {
         };
     });
 }
-
 
 // ======================================================
 // FIN DU MOTEUR
