@@ -25,7 +25,11 @@ import {
     createSale,
     addCustomer,
     getCustomers,
-    getAll
+    getAll,
+    addSupplier,
+    getSuppliers,
+    updateRecord,
+    removeRecord
 } from "./database.js";
 
 import {
@@ -34,7 +38,6 @@ import {
     listenToConnection,
     isOnline
 } from "./offline.js";
-
 
 /* CONFIGURATION */
 
@@ -48,9 +51,9 @@ let customers = [];
 let sales = [];
 let expenses = [];
 let losses = [];
+let suppliers = [];
 
-const $ = (id) => document.getElementById(id);
-
+const $ = id => document.getElementById(id);
 
 /* OUTILS */
 
@@ -87,7 +90,6 @@ function escapeHTML(value) {
         "'": "&#039;"
     })[character]);
 }
-
 
 /* ÉCRANS */
 
@@ -164,7 +166,6 @@ function showApplication() {
     $("app-container").hidden = false;
 }
 
-
 /* CONNEXION */
 
 const loginForm = $("login-form");
@@ -188,6 +189,7 @@ if (loginForm) {
 
         } catch (error) {
             console.error(error);
+
             showMessage(
                 "auth-message",
                 "Connexion impossible. Vérifiez votre email et votre mot de passe."
@@ -195,7 +197,6 @@ if (loginForm) {
         }
     });
 }
-
 
 /* INSCRIPTION */
 
@@ -264,7 +265,6 @@ if (registerForm) {
     });
 }
 
-
 /* AFFICHER L'INSCRIPTION */
 
 const showRegisterButton = $("show-register");
@@ -281,7 +281,6 @@ if (showRegisterButton) {
     });
 }
 
-
 /* CONNEXION GOOGLE */
 
 const googleButton = $("google-login");
@@ -290,6 +289,7 @@ if (googleButton) {
     googleButton.addEventListener("click", async () => {
         try {
             showMessage("auth-message", "Connexion Google...", "info");
+
             await signInWithPopup(auth, googleProvider);
 
         } catch (error) {
@@ -298,7 +298,6 @@ if (googleButton) {
         }
     });
 }
-
 
 /* DÉCONNEXION */
 
@@ -312,7 +311,6 @@ if ($("logout-button")) {
         }
     });
 }
-
 
 /* AUTORISATIONS */
 
@@ -357,7 +355,6 @@ async function checkUserAccess(user) {
     return false;
 }
 
-
 /* CHARGEMENT DES DONNÉES */
 
 async function loadData() {
@@ -367,11 +364,13 @@ async function loadData() {
         sales = await getAll("sales");
         expenses = await getAll("expenses");
         losses = await getAll("losses");
+        suppliers = await getSuppliers();
 
         renderDashboard();
         renderProducts();
         renderCustomers();
         renderSales();
+        renderSuppliers();
 
         updateSaleProductOptions();
         updateSaleCustomerOptions();
@@ -384,7 +383,6 @@ async function loadData() {
         );
     }
 }
-
 
 /* TABLEAU DE BORD */
 
@@ -456,7 +454,6 @@ function renderDashboard() {
     renderLowStockAlerts();
 }
 
-
 /* ALERTES */
 
 function renderLowStockAlerts() {
@@ -479,7 +476,6 @@ function renderLowStockAlerts() {
         </div>
     `).join("");
 }
-
 
 /* PRODUITS */
 
@@ -504,7 +500,6 @@ function renderProducts() {
         </tr>
     `).join("");
 }
-
 
 if ($("product-form")) {
     $("product-form").addEventListener("submit", async event => {
@@ -541,6 +536,7 @@ if ($("product-form")) {
 
         try {
             await addProduct(product);
+
             $("product-form").reset();
 
             await loadData();
@@ -553,7 +549,6 @@ if ($("product-form")) {
         }
     });
 }
-
 
 /* LISTE DES BOISSONS */
 
@@ -574,7 +569,6 @@ function updateSaleProductOptions() {
     });
 }
 
-
 /* LISTE DES CLIENTS */
 
 function updateSaleCustomerOptions() {
@@ -593,7 +587,6 @@ function updateSaleCustomerOptions() {
     });
 }
 
-
 /* PRÉREMPLISSAGE DES PRIX */
 
 if ($("sale-product")) {
@@ -611,7 +604,6 @@ if ($("sale-product")) {
         $("sale-bottle-price").value = Number(product.price || 0);
     });
 }
-
 
 /* ENREGISTREMENT DES VENTES */
 
@@ -721,7 +713,6 @@ if ($("sale-form")) {
     });
 }
 
-
 /* HISTORIQUE DES VENTES */
 
 function renderSales() {
@@ -750,7 +741,6 @@ function renderSales() {
     `).join("");
 }
 
-
 /* CLIENTS */
 
 function renderCustomers() {
@@ -770,7 +760,6 @@ function renderCustomers() {
         </div>
     `).join("");
 }
-
 
 if ($("customer-form")) {
     $("customer-form").addEventListener("submit", async event => {
@@ -805,6 +794,247 @@ if ($("customer-form")) {
     });
 }
 
+/* ==================================
+   GESTION DES FOURNISSEURS
+================================== */
+
+function renderSuppliers() {
+    const container = $("suppliers-list");
+    if (!container) return;
+
+    if (!suppliers.length) {
+        container.innerHTML = `
+            <p>Aucun fournisseur enregistré.</p>
+        `;
+    } else {
+        container.innerHTML = suppliers.map(supplier => `
+            <div class="supplier-card">
+                <h4>${escapeHTML(supplier.name)}</h4>
+
+                <p>
+                    Téléphone :
+                    ${escapeHTML(supplier.phone || "Non renseigné")}
+                </p>
+
+                <p>
+                    Adresse :
+                    ${escapeHTML(supplier.address || "Non renseignée")}
+                </p>
+
+                <p>
+                    Contact :
+                    ${escapeHTML(supplier.contact || "Non renseigné")}
+                </p>
+
+                <button
+                    type="button"
+                    data-edit-supplier="${escapeHTML(supplier.id)}">
+                    Modifier
+                </button>
+
+                <button
+                    type="button"
+                    data-delete-supplier="${escapeHTML(supplier.id)}">
+                    Supprimer
+                </button>
+            </div>
+        `).join("");
+    }
+
+    addSupplierFormIfNeeded();
+}
+
+/* CRÉATION DU FORMULAIRE FOURNISSEUR */
+
+function addSupplierFormIfNeeded() {
+    const section = $("suppliers-section");
+
+    if (!section || $("supplier-form")) return;
+
+    const formContainer = document.createElement("div");
+
+    formContainer.id = "supplier-form-container";
+
+    formContainer.innerHTML = `
+        <div class="content-card">
+            <h3>Ajouter un fournisseur</h3>
+
+            <form id="supplier-form">
+
+                <label for="supplier-name">Nom du fournisseur</label>
+                <input
+                    type="text"
+                    id="supplier-name"
+                    placeholder="Nom du fournisseur"
+                    required
+                >
+
+                <label for="supplier-phone">Téléphone</label>
+                <input
+                    type="tel"
+                    id="supplier-phone"
+                    placeholder="Numéro de téléphone"
+                >
+
+                <label for="supplier-address">Adresse</label>
+                <input
+                    type="text"
+                    id="supplier-address"
+                    placeholder="Adresse du fournisseur"
+                >
+
+                <label for="supplier-contact">Personne à contacter</label>
+                <input
+                    type="text"
+                    id="supplier-contact"
+                    placeholder="Nom du contact"
+                >
+
+                <button type="submit">
+                    Enregistrer le fournisseur
+                </button>
+
+            </form>
+        </div>
+    `;
+
+    section.insertBefore(formContainer, $("suppliers-list"));
+
+    $("supplier-form").addEventListener("submit", async event => {
+        event.preventDefault();
+
+        if (!currentUser) return;
+
+        const supplier = {
+            name: $("supplier-name").value.trim(),
+            phone: $("supplier-phone").value.trim(),
+            address: $("supplier-address").value.trim(),
+            contact: $("supplier-contact").value.trim(),
+            active: true,
+            createdBy: currentUser.uid
+        };
+
+        if (!supplier.name) {
+            alert("Le nom du fournisseur est obligatoire.");
+            return;
+        }
+
+        try {
+            await addSupplier(supplier);
+
+            $("supplier-form").reset();
+
+            await loadData();
+
+            alert("Fournisseur enregistré avec succès.");
+
+        } catch (error) {
+            console.error(error);
+            alert("Impossible d'enregistrer le fournisseur.");
+        }
+    });
+}
+
+/* ACTIONS SUR LES FOURNISSEURS */
+
+if ($("suppliers-list")) {
+    $("suppliers-list").addEventListener("click", async event => {
+
+        const editButton = event.target.closest("[data-edit-supplier]");
+        const deleteButton = event.target.closest("[data-delete-supplier]");
+
+        if (editButton) {
+            const supplierId = editButton.dataset.editSupplier;
+
+            const supplier = suppliers.find(item =>
+                item.id === supplierId
+            );
+
+            if (!supplier) {
+                alert("Fournisseur introuvable.");
+                return;
+            }
+
+            const name = prompt(
+                "Nom du fournisseur :",
+                supplier.name || ""
+            );
+
+            if (name === null) return;
+
+            if (!name.trim()) {
+                alert("Le nom est obligatoire.");
+                return;
+            }
+
+            const phone = prompt(
+                "Téléphone :",
+                supplier.phone || ""
+            );
+
+            if (phone === null) return;
+
+            const address = prompt(
+                "Adresse :",
+                supplier.address || ""
+            );
+
+            if (address === null) return;
+
+            const contact = prompt(
+                "Personne à contacter :",
+                supplier.contact || ""
+            );
+
+            if (contact === null) return;
+
+            try {
+                await updateRecord("suppliers", supplierId, {
+                    name: name.trim(),
+                    phone: phone.trim(),
+                    address: address.trim(),
+                    contact: contact.trim()
+                });
+
+                await loadData();
+
+                alert("Fournisseur modifié avec succès.");
+
+            } catch (error) {
+                console.error(error);
+                alert("Impossible de modifier ce fournisseur.");
+            }
+        }
+
+        if (deleteButton) {
+            const supplierId = deleteButton.dataset.deleteSupplier;
+
+            const supplier = suppliers.find(item =>
+                item.id === supplierId
+            );
+
+            if (!supplier) return;
+
+            if (!confirm(
+                `Voulez-vous vraiment supprimer le fournisseur ${supplier.name} ?`
+            )) {
+                return;
+            }
+
+            try {
+                await removeRecord("suppliers", supplierId);
+
+                await loadData();
+
+                alert("Fournisseur supprimé.");
+
+            } catch (error) {
+                console.error(error);
+                alert("Impossible de supprimer ce fournisseur.");
+            }
+        }
+    });
+}
 
 /* NAVIGATION PRINCIPALE */
 
@@ -832,7 +1062,6 @@ document.querySelectorAll("[data-page]").forEach(button => {
     });
 });
 
-
 /* SOUS-MENUS */
 
 document.querySelectorAll("[data-section]").forEach(button => {
@@ -844,7 +1073,6 @@ document.querySelectorAll("[data-section]").forEach(button => {
         }
     });
 });
-
 
 /* DEMANDES D'ACCÈS */
 
@@ -894,7 +1122,6 @@ async function renderUserRequests() {
         container.innerHTML = "<p>Impossible de charger les demandes.</p>";
     }
 }
-
 
 /* ACTIONS ADMINISTRATEUR */
 
@@ -961,12 +1188,11 @@ if ($("users-list")) {
 
             } catch (error) {
                 console.error(error);
-                alert("Impossible de refuser cette demande.");
+                alert("Impossible de refuser cet utilisateur.");
             }
         }
     });
 }
-
 
 /* INFORMATIONS UTILISATEUR */
 
@@ -982,7 +1208,6 @@ function displayUserInformation(user) {
 
     element.textContent = `${name} — ${role}`;
 }
-
 
 /* INTERFACE SELON LE RÔLE */
 
@@ -1000,7 +1225,6 @@ function configureRoleInterface() {
     }
 }
 
-
 /* CONNEXION INTERNET */
 
 function updateConnectionStatus(online) {
@@ -1009,7 +1233,6 @@ function updateConnectionStatus(online) {
 
     element.textContent = online ? "En ligne" : "Hors connexion";
 }
-
 
 /* INITIALISATION */
 
@@ -1046,7 +1269,6 @@ async function initializeApplication(user) {
     }
 }
 
-
 /* SURVEILLANCE DE L'AUTHENTIFICATION */
 
 onAuthStateChanged(auth, async user => {
@@ -1063,7 +1285,6 @@ onAuthStateChanged(auth, async user => {
         }
     }
 });
-
 
 /* INITIALISATION HORS LIGNE */
 
@@ -1088,7 +1309,6 @@ async function initializeOfflineFeatures() {
 }
 
 initializeOfflineFeatures();
-
 
 /* SERVICE WORKER */
 
