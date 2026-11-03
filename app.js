@@ -36,9 +36,7 @@ import {
 } from "./offline.js";
 
 
-/* =====================================
-   CONFIGURATION GÉNÉRALE
-===================================== */
+/* CONFIGURATION */
 
 const ADMIN_EMAIL = "christopheatangana2@gmail.com";
 
@@ -53,9 +51,11 @@ let losses = [];
 
 const $ = (id) => document.getElementById(id);
 
-function showMessage(elementId, message, type = "error") {
-    const element = $(elementId);
 
+/* OUTILS */
+
+function showMessage(id, message, type = "error") {
+    const element = $(id);
     if (!element) return;
 
     element.textContent = message;
@@ -71,43 +71,49 @@ function formatMoney(value) {
 function localDate() {
     const now = new Date();
 
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-
-    return `${year}-${month}-${day}`;
+    return [
+        now.getFullYear(),
+        String(now.getMonth() + 1).padStart(2, "0"),
+        String(now.getDate()).padStart(2, "0")
+    ].join("-");
 }
 
 function escapeHTML(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (character) => {
-        const entities = {
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            '"': "&quot;",
-            "'": "&#039;"
-        };
-
-        return entities[character];
-    });
-}
-
-function showElement(id) {
-    const element = $(id);
-    if (element) element.hidden = false;
-}
-
-function hideElement(id) {
-    const element = $(id);
-    if (element) element.hidden = true;
+    return String(value ?? "").replace(/[&<>"']/g, character => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;"
+    })[character]);
 }
 
 
-/* =====================================
-   ÉCRANS DE CONNEXION ET D'ACCÈS
-===================================== */
+/* ÉCRANS */
 
 let pendingPanel = null;
+
+function resetLoginInterface() {
+    if ($("login-form")) {
+        $("login-form").hidden = false;
+        $("login-form").reset();
+    }
+
+    if ($("register-form")) {
+        $("register-form").hidden = true;
+        $("register-form").reset();
+    }
+
+    if ($("show-register")) {
+        $("show-register").hidden = false;
+    }
+
+    if ($("google-login")) {
+        $("google-login").hidden = false;
+    }
+
+    showMessage("auth-message", "");
+}
 
 function createPendingPanel() {
     if (pendingPanel) return;
@@ -118,19 +124,9 @@ function createPendingPanel() {
     pendingPanel.innerHTML = `
         <div class="login-card">
             <h2>Demande d'accès envoyée</h2>
-
-            <p>
-                Votre compte a été créé.
-                L'administrateur doit encore autoriser votre accès.
-            </p>
-
-            <p>
-                Vous pourrez utiliser le dépôt après validation.
-            </p>
-
-            <button id="pending-logout">
-                Se déconnecter
-            </button>
+            <p>Votre compte a été créé.</p>
+            <p>L'administrateur doit autoriser votre accès.</p>
+            <button id="pending-logout">Se déconnecter</button>
         </div>
     `;
 
@@ -142,44 +138,43 @@ function createPendingPanel() {
 }
 
 function showPendingAccess() {
-    hideElement("login-screen");
-    hideElement("app-container");
+    $("login-screen").hidden = true;
+    $("app-container").hidden = true;
 
     createPendingPanel();
     pendingPanel.hidden = false;
 }
 
 function hidePendingAccess() {
-    if (pendingPanel) {
-        pendingPanel.hidden = true;
-    }
+    if (pendingPanel) pendingPanel.hidden = true;
 }
 
 function showLogin() {
     hidePendingAccess();
-    showElement("login-screen");
-    hideElement("app-container");
+    resetLoginInterface();
+
+    $("login-screen").hidden = false;
+    $("app-container").hidden = true;
 }
 
 function showApplication() {
     hidePendingAccess();
-    hideElement("login-screen");
-    showElement("app-container");
+
+    $("login-screen").hidden = true;
+    $("app-container").hidden = false;
 }
 
 
-/* =====================================
-   CONNEXION PAR EMAIL
-===================================== */
+/* CONNEXION */
 
 const loginForm = $("login-form");
 
 if (loginForm) {
-    loginForm.addEventListener("submit", async (event) => {
+    loginForm.addEventListener("submit", async event => {
         event.preventDefault();
 
-        const email = $("login-email")?.value.trim();
-        const password = $("login-password")?.value;
+        const email = $("login-email").value.trim();
+        const password = $("login-password").value;
 
         if (!email || !password) {
             showMessage("auth-message", "Remplissez tous les champs.");
@@ -189,15 +184,10 @@ if (loginForm) {
         try {
             showMessage("auth-message", "Connexion en cours...", "info");
 
-            await signInWithEmailAndPassword(
-                auth,
-                email,
-                password
-            );
+            await signInWithEmailAndPassword(auth, email, password);
 
         } catch (error) {
             console.error(error);
-
             showMessage(
                 "auth-message",
                 "Connexion impossible. Vérifiez votre email et votre mot de passe."
@@ -207,19 +197,17 @@ if (loginForm) {
 }
 
 
-/* =====================================
-   INSCRIPTION
-===================================== */
+/* INSCRIPTION */
 
 const registerForm = $("register-form");
 
 if (registerForm) {
-    registerForm.addEventListener("submit", async (event) => {
+    registerForm.addEventListener("submit", async event => {
         event.preventDefault();
 
-        const name = $("register-name")?.value.trim();
-        const email = $("register-email")?.value.trim();
-        const password = $("register-password")?.value;
+        const name = $("register-name").value.trim();
+        const email = $("register-email").value.trim();
+        const password = $("register-password").value;
 
         if (!name || !email || !password) {
             showMessage("auth-message", "Remplissez tous les champs.");
@@ -270,30 +258,31 @@ if (registerForm) {
 
             showMessage(
                 "auth-message",
-                "Impossible de créer le compte. Vérifiez les informations et les autorisations Firebase."
+                "Impossible de créer le compte. Vérifiez les autorisations Firebase."
             );
         }
     });
 }
 
 
-/* =====================================
-   AFFICHER LE FORMULAIRE D'INSCRIPTION
-===================================== */
+/* AFFICHER L'INSCRIPTION */
 
 const showRegisterButton = $("show-register");
 
 if (showRegisterButton) {
     showRegisterButton.addEventListener("click", () => {
-        if (loginForm) loginForm.hidden = true;
-        if (registerForm) registerForm.hidden = false;
+        loginForm.hidden = true;
+        registerForm.hidden = false;
+
+        showRegisterButton.hidden = true;
+        $("google-login").hidden = true;
+
+        showMessage("auth-message", "");
     });
 }
 
 
-/* =====================================
-   CONNEXION GOOGLE
-===================================== */
+/* CONNEXION GOOGLE */
 
 const googleButton = $("google-login");
 
@@ -301,29 +290,20 @@ if (googleButton) {
     googleButton.addEventListener("click", async () => {
         try {
             showMessage("auth-message", "Connexion Google...", "info");
-
             await signInWithPopup(auth, googleProvider);
 
         } catch (error) {
             console.error(error);
-
-            showMessage(
-                "auth-message",
-                "La connexion Google a échoué."
-            );
+            showMessage("auth-message", "La connexion Google a échoué.");
         }
     });
 }
 
 
-/* =====================================
-   DÉCONNEXION
-===================================== */
+/* DÉCONNEXION */
 
-const logoutButton = $("logout-button");
-
-if (logoutButton) {
-    logoutButton.addEventListener("click", async () => {
+if ($("logout-button")) {
+    $("logout-button").addEventListener("click", async () => {
         try {
             await signOut(auth);
         } catch (error) {
@@ -334,18 +314,13 @@ if (logoutButton) {
 }
 
 
-/* =====================================
-   VÉRIFICATION DES DROITS
-===================================== */
+/* AUTORISATIONS */
 
 async function checkUserAccess(user) {
     const userRef = doc(db, "authorizedUsers", user.uid);
+    const snapshot = await getDoc(userRef);
 
-    const userSnapshot = await getDoc(userRef);
-
-    // Administrateur principal
     if (user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-
         await setDoc(userRef, {
             uid: user.uid,
             name: user.displayName || "Administrateur",
@@ -356,118 +331,102 @@ async function checkUserAccess(user) {
         }, { merge: true });
 
         currentRole = "admin";
-
         return true;
     }
 
-    // Utilisateur déjà autorisé
-    if (userSnapshot.exists()) {
-        const userData = userSnapshot.data();
+    if (snapshot.exists()) {
+        const data = snapshot.data();
 
         if (
-            userData.status === "approved" &&
-            ["admin", "operator"].includes(userData.role)
+            data.status === "approved" &&
+            ["admin", "operator"].includes(data.role)
         ) {
-            currentRole = userData.role;
+            currentRole = data.role;
             return true;
         }
     }
 
-    // Demande d'accès en attente
-    await setDoc(
-        doc(db, "userRequests", user.uid),
-        {
-            uid: user.uid,
-            name: user.displayName || "",
-            email: user.email || "",
-            status: "pending",
-            requestedAt: serverTimestamp()
-        },
-        { merge: true }
-    );
+    await setDoc(doc(db, "userRequests", user.uid), {
+        uid: user.uid,
+        name: user.displayName || "",
+        email: user.email || "",
+        status: "pending",
+        requestedAt: serverTimestamp()
+    }, { merge: true });
 
     return false;
 }
 
 
-/* =====================================
-   CHARGEMENT DES DONNÉES
-===================================== */
+/* CHARGEMENT DES DONNÉES */
 
 async function loadData() {
     try {
         products = await getProducts();
-
         customers = await getCustomers();
-
         sales = await getAll("sales");
-
         expenses = await getAll("expenses");
-
         losses = await getAll("losses");
 
         renderDashboard();
         renderProducts();
         renderCustomers();
         renderSales();
+
         updateSaleProductOptions();
         updateSaleCustomerOptions();
 
     } catch (error) {
-        console.error("Erreur de chargement :", error);
+        console.error(error);
 
         alert(
-            "Impossible de charger les données. Vérifiez les règles Firestore et votre connexion Internet."
+            "Impossible de charger les données. Vérifiez Firestore et votre connexion."
         );
     }
 }
 
 
-/* =====================================
-   TABLEAU DE BORD
-===================================== */
+/* TABLEAU DE BORD */
 
 function renderDashboard() {
     const today = localDate();
 
-    const todaySales = sales.filter((sale) => {
-        return String(sale.createdAt || "").slice(0, 10) === today;
-    });
+    const todaySales = sales.filter(sale =>
+        String(sale.createdAt || "").slice(0, 10) === today
+    );
 
-    const todayExpenses = expenses.filter((expense) => {
-        return String(expense.createdAt || "").slice(0, 10) === today;
-    });
+    const todayExpenses = expenses.filter(expense =>
+        String(expense.createdAt || "").slice(0, 10) === today
+    );
 
-    const totalProducts = products.length;
+    const totalStock = products.reduce(
+        (sum, product) => sum + Number(product.quantity || 0), 0
+    );
 
-    const totalStock = products.reduce((sum, product) => {
-        return sum + Number(product.quantity || 0);
-    }, 0);
+    const stockCost = products.reduce(
+        (sum, product) =>
+            sum + Number(product.quantity || 0) * Number(product.cost || 0),
+        0
+    );
 
-    const stockCost = products.reduce((sum, product) => {
-        return sum +
-            Number(product.quantity || 0) *
-            Number(product.cost || 0);
-    }, 0);
+    const revenue = todaySales.reduce(
+        (sum, sale) => sum + Number(sale.total || 0), 0
+    );
 
-    const dailyRevenue = todaySales.reduce((sum, sale) => {
-        return sum + Number(sale.total || 0);
-    }, 0);
+    const profit = todaySales.reduce(
+        (sum, sale) => sum + Number(sale.profit || 0), 0
+    );
 
-    const dailyProfit = todaySales.reduce((sum, sale) => {
-        return sum + Number(sale.profit || 0);
-    }, 0);
+    const expenseTotal = todayExpenses.reduce(
+        (sum, expense) => sum + Number(expense.amount || 0), 0
+    );
 
-    const dailyExpenses = todayExpenses.reduce((sum, expense) => {
-        return sum + Number(expense.amount || 0);
-    }, 0);
-
-    const totalDebts = customers.reduce((sum, customer) => {
-        return sum + Number(customer.balance || 0);
-    }, 0);
+    const debts = customers.reduce(
+        (sum, customer) => sum + Number(customer.balance || 0), 0
+    );
 
     if ($("stat-products")) {
-        $("stat-products").textContent = totalProducts;
+        $("stat-products").textContent = products.length;
     }
 
     if ($("stat-stock")) {
@@ -479,113 +438,88 @@ function renderDashboard() {
     }
 
     if ($("stat-sales")) {
-        $("stat-sales").textContent = formatMoney(dailyRevenue);
+        $("stat-sales").textContent = formatMoney(revenue);
     }
 
     if ($("stat-profit")) {
-        $("stat-profit").textContent = formatMoney(
-            dailyProfit - dailyExpenses
-        );
+        $("stat-profit").textContent = formatMoney(profit - expenseTotal);
     }
 
     if ($("stat-expenses")) {
-        $("stat-expenses").textContent = formatMoney(dailyExpenses);
+        $("stat-expenses").textContent = formatMoney(expenseTotal);
     }
 
     if ($("stat-debts")) {
-        $("stat-debts").textContent = formatMoney(totalDebts);
+        $("stat-debts").textContent = formatMoney(debts);
     }
 
     renderLowStockAlerts();
 }
 
 
-/* =====================================
-   ALERTES DE STOCK
-===================================== */
+/* ALERTES */
 
 function renderLowStockAlerts() {
     const container = $("low-stock-alerts");
-
     if (!container) return;
 
-    const lowStock = products.filter((product) => {
-        return Number(product.quantity || 0) <=
-            Number(product.threshold || 12);
-    });
+    const lowStock = products.filter(product =>
+        Number(product.quantity || 0) <= Number(product.threshold || 12)
+    );
 
-    if (lowStock.length === 0) {
+    if (!lowStock.length) {
         container.innerHTML = "<p>Aucune alerte de stock.</p>";
         return;
     }
 
-    container.innerHTML = lowStock.map((product) => `
+    container.innerHTML = lowStock.map(product => `
         <div class="alert-item">
-            ⚠️ ${escapeHTML(product.name)}
-            : ${Number(product.quantity || 0)} bouteilles restantes
+            ⚠️ ${escapeHTML(product.name)} :
+            ${Number(product.quantity || 0)} bouteilles restantes
         </div>
     `).join("");
 }
 
 
-/* =====================================
-   GESTION DES PRODUITS
-===================================== */
+/* PRODUITS */
 
 function renderProducts() {
     const table = $("products-table");
-
     if (!table) return;
 
-    if (products.length === 0) {
+    if (!products.length) {
         table.innerHTML = `
-            <tr>
-                <td colspan="5">Aucun produit enregistré.</td>
-            </tr>
+            <tr><td colspan="5">Aucun produit enregistré.</td></tr>
         `;
         return;
     }
 
-    table.innerHTML = products.map((product) => `
+    table.innerHTML = products.map(product => `
         <tr>
             <td>${escapeHTML(product.name)}</td>
-
-            <td>
-                ${Number(product.quantity || 0)}
-            </td>
-
-            <td>
-                ${formatMoney(product.cost)}
-            </td>
-
-            <td>
-                ${formatMoney(product.price)}
-            </td>
-
-            <td>
-                ${Number(product.unitsPerCrate || 12)} / casier
-            </td>
+            <td>${Number(product.quantity || 0)}</td>
+            <td>${formatMoney(product.cost)}</td>
+            <td>${formatMoney(product.price)}</td>
+            <td>${Number(product.unitsPerCrate || 12)} / casier</td>
         </tr>
     `).join("");
 }
 
 
-const productForm = $("product-form");
-
-if (productForm) {
-    productForm.addEventListener("submit", async (event) => {
+if ($("product-form")) {
+    $("product-form").addEventListener("submit", async event => {
         event.preventDefault();
 
         if (!currentUser) return;
 
         const product = {
-            name: $("product-name")?.value.trim(),
-            brand: $("product-brand")?.value.trim(),
-            unitsPerCrate: Number($("product-units")?.value || 12),
-            quantity: Number($("product-quantity")?.value || 0),
-            cost: Number($("product-cost")?.value || 0),
-            price: Number($("product-price")?.value || 0),
-            threshold: Number($("product-threshold")?.value || 12),
+            name: $("product-name").value.trim(),
+            brand: $("product-brand").value.trim(),
+            unitsPerCrate: Number($("product-units").value || 12),
+            quantity: Number($("product-quantity").value || 0),
+            cost: Number($("product-cost").value || 0),
+            price: Number($("product-price").value || 0),
+            threshold: Number($("product-threshold").value || 12),
             active: true,
             createdBy: currentUser.uid
         };
@@ -607,8 +541,7 @@ if (productForm) {
 
         try {
             await addProduct(product);
-
-            productForm.reset();
+            $("product-form").reset();
 
             await loadData();
 
@@ -622,24 +555,18 @@ if (productForm) {
 }
 
 
-/* =====================================
-   LISTE DES PRODUITS POUR LES VENTES
-===================================== */
+/* LISTE DES BOISSONS */
 
 function updateSaleProductOptions() {
     const select = $("sale-product");
-
     if (!select) return;
 
-    select.innerHTML = `
-        <option value="">Choisir une boisson</option>
-    `;
+    select.innerHTML = '<option value="">Choisir une boisson</option>';
 
-    products.forEach((product) => {
+    products.forEach(product => {
         const option = document.createElement("option");
 
         option.value = product.id;
-
         option.textContent =
             `${product.name} (${product.quantity || 0} bouteilles)`;
 
@@ -648,24 +575,18 @@ function updateSaleProductOptions() {
 }
 
 
-/* =====================================
-   LISTE DES CLIENTS POUR LES VENTES
-===================================== */
+/* LISTE DES CLIENTS */
 
 function updateSaleCustomerOptions() {
     const select = $("sale-customer");
-
     if (!select) return;
 
-    select.innerHTML = `
-        <option value="">Client de passage</option>
-    `;
+    select.innerHTML = '<option value="">Client de passage</option>';
 
-    customers.forEach((customer) => {
+    customers.forEach(customer => {
         const option = document.createElement("option");
 
         option.value = customer.id;
-
         option.textContent = customer.name;
 
         select.appendChild(option);
@@ -673,60 +594,44 @@ function updateSaleCustomerOptions() {
 }
 
 
-/* =====================================
-   PRÉREMPLIR LES PRIX D'UNE VENTE
-===================================== */
+/* PRÉREMPLISSAGE DES PRIX */
 
-const saleProductSelect = $("sale-product");
-
-if (saleProductSelect) {
-    saleProductSelect.addEventListener("change", () => {
-        const product = products.find((item) => {
-            return item.id === saleProductSelect.value;
-        });
+if ($("sale-product")) {
+    $("sale-product").addEventListener("change", () => {
+        const product = products.find(item =>
+            item.id === $("sale-product").value
+        );
 
         if (!product) return;
 
-        if ($("sale-crate-price")) {
-            $("sale-crate-price").value =
-                Number(product.price || 0) *
-                Number(product.unitsPerCrate || 12);
-        }
+        $("sale-crate-price").value =
+            Number(product.price || 0) *
+            Number(product.unitsPerCrate || 12);
 
-        if ($("sale-bottle-price")) {
-            $("sale-bottle-price").value =
-                Number(product.price || 0);
-        }
+        $("sale-bottle-price").value = Number(product.price || 0);
     });
 }
 
 
-/* =====================================
-   ENREGISTREMENT D'UNE VENTE
-===================================== */
+/* ENREGISTREMENT DES VENTES */
 
-const saleForm = $("sale-form");
-
-if (saleForm) {
-    saleForm.addEventListener("submit", async (event) => {
+if ($("sale-form")) {
+    $("sale-form").addEventListener("submit", async event => {
         event.preventDefault();
 
         if (!currentUser) return;
 
-        const productId = $("sale-product")?.value;
+        const productId = $("sale-product").value;
 
-        const product = products.find((item) => {
-            return item.id === productId;
-        });
+        const product = products.find(item => item.id === productId);
 
         if (!product) {
             alert("Choisissez une boisson.");
             return;
         }
 
-        const crates = Number($("sale-crates")?.value || 0);
-        const bottles = Number($("sale-bottles")?.value || 0);
-
+        const crates = Number($("sale-crates").value || 0);
+        const bottles = Number($("sale-bottles").value || 0);
         const units = Number(product.unitsPerCrate || 12);
 
         const totalBottles = crates * units + bottles;
@@ -737,29 +642,25 @@ if (saleForm) {
         }
 
         if (totalBottles > Number(product.quantity || 0)) {
-            alert("Stock insuffisant pour cette vente.");
+            alert("Stock insuffisant.");
             return;
         }
 
         const cratePrice = Number(
-            $("sale-crate-price")?.value ||
+            $("sale-crate-price").value ||
             Number(product.price || 0) * units
         );
 
         const bottlePrice = Number(
-            $("sale-bottle-price")?.value ||
-            product.price ||
-            0
+            $("sale-bottle-price").value || product.price || 0
         );
 
-        const total =
-            crates * cratePrice +
-            bottles * bottlePrice;
+        const total = crates * cratePrice + bottles * bottlePrice;
 
-        const paymentMethod = $("sale-payment")?.value || "cash";
+        const paymentMethod = $("sale-payment").value;
 
         const enteredAmount = Number(
-            $("sale-amount-paid")?.value || 0
+            $("sale-amount-paid").value || 0
         );
 
         let amountPaid = enteredAmount;
@@ -775,14 +676,14 @@ if (saleForm) {
             return;
         }
 
-        const customerId = $("sale-customer")?.value || null;
+        const customerId = $("sale-customer").value || null;
 
-        const customer = customers.find((item) => {
-            return item.id === customerId;
-        });
+        const customer = customers.find(item =>
+            item.id === customerId
+        );
 
         if (amountPaid < total && !customerId) {
-            alert("Une vente à crédit ou partiellement payée doit être associée à un client.");
+            alert("Sélectionnez un client pour une vente à crédit ou partielle.");
             return;
         }
 
@@ -807,7 +708,7 @@ if (saleForm) {
         try {
             await createSale(sale);
 
-            saleForm.reset();
+            $("sale-form").reset();
 
             await loadData();
 
@@ -815,116 +716,68 @@ if (saleForm) {
 
         } catch (error) {
             console.error(error);
-
-            alert(
-                error.message || "Impossible d'enregistrer cette vente."
-            );
+            alert(error.message || "Impossible d'enregistrer la vente.");
         }
     });
 }
 
 
-/* =====================================
-   HISTORIQUE DES VENTES
-===================================== */
+/* HISTORIQUE DES VENTES */
 
 function renderSales() {
     const container = $("sales-history");
-
     if (!container) return;
 
-    if (sales.length === 0) {
+    if (!sales.length) {
         container.innerHTML = "<p>Aucune vente enregistrée.</p>";
         return;
     }
 
-    const sortedSales = [...sales].sort((a, b) => {
-        return String(b.createdAt || "").localeCompare(
-            String(a.createdAt || "")
-        );
-    });
+    const sorted = [...sales].sort((a, b) =>
+        String(b.createdAt || "").localeCompare(String(a.createdAt || ""))
+    );
 
-    container.innerHTML = sortedSales.map((sale) => `
+    container.innerHTML = sorted.map(sale => `
         <div class="sale-card">
             <h4>${escapeHTML(sale.productName || "Boisson")}</h4>
-
-            <p>
-                Client :
-                ${escapeHTML(sale.customerName || "Client de passage")}
-            </p>
-
-            <p>
-                Quantité :
-                ${Number(sale.totalBottles || sale.quantity || 0)}
-                bouteilles
-            </p>
-
-            <p>
-                Total :
-                ${formatMoney(sale.total)}
-            </p>
-
-            <p>
-                Payé :
-                ${formatMoney(sale.amountPaid)}
-            </p>
-
-            <p>
-                Reste :
-                ${formatMoney(sale.remaining)}
-            </p>
-
-            <p>
-                Date :
-                ${escapeHTML(
-                    String(sale.createdAt || "").slice(0, 16)
-                )}
-            </p>
+            <p>Client : ${escapeHTML(sale.customerName || "Client de passage")}</p>
+            <p>Quantité : ${Number(sale.totalBottles || sale.quantity || 0)} bouteilles</p>
+            <p>Total : ${formatMoney(sale.total)}</p>
+            <p>Payé : ${formatMoney(sale.amountPaid)}</p>
+            <p>Reste : ${formatMoney(sale.remaining)}</p>
+            <p>Date : ${escapeHTML(String(sale.createdAt || "").slice(0, 16))}</p>
         </div>
     `).join("");
 }
 
 
-/* =====================================
-   GESTION DES CLIENTS
-===================================== */
+/* CLIENTS */
 
 function renderCustomers() {
     const container = $("customers-list");
-
     if (!container) return;
 
-    if (customers.length === 0) {
+    if (!customers.length) {
         container.innerHTML = "<p>Aucun client enregistré.</p>";
         return;
     }
 
-    container.innerHTML = customers.map((customer) => `
+    container.innerHTML = customers.map(customer => `
         <div class="customer-card">
             <h4>${escapeHTML(customer.name)}</h4>
-
-            <p>
-                Téléphone :
-                ${escapeHTML(customer.phone || "Non renseigné")}
-            </p>
-
-            <p>
-                Solde restant :
-                ${formatMoney(customer.balance)}
-            </p>
+            <p>Téléphone : ${escapeHTML(customer.phone || "Non renseigné")}</p>
+            <p>Solde restant : ${formatMoney(customer.balance)}</p>
         </div>
     `).join("");
 }
 
 
-const customerForm = $("customer-form");
-
-if (customerForm) {
-    customerForm.addEventListener("submit", async (event) => {
+if ($("customer-form")) {
+    $("customer-form").addEventListener("submit", async event => {
         event.preventDefault();
 
-        const name = $("customer-name")?.value.trim();
-        const phone = $("customer-phone")?.value.trim();
+        const name = $("customer-name").value.trim();
+        const phone = $("customer-phone").value.trim();
 
         if (!name) {
             alert("Le nom du client est obligatoire.");
@@ -939,7 +792,7 @@ if (customerForm) {
                 createdBy: currentUser?.uid || null
             });
 
-            customerForm.reset();
+            $("customer-form").reset();
 
             await loadData();
 
@@ -953,15 +806,13 @@ if (customerForm) {
 }
 
 
-/* =====================================
-   GESTION DES MENUS PRINCIPAUX
-===================================== */
+/* NAVIGATION PRINCIPALE */
 
-document.querySelectorAll("[data-page]").forEach((button) => {
+document.querySelectorAll("[data-page]").forEach(button => {
     button.addEventListener("click", () => {
         const pageName = button.dataset.page;
 
-        document.querySelectorAll(".page").forEach((page) => {
+        document.querySelectorAll(".page").forEach(page => {
             page.classList.remove("active");
             page.hidden = true;
         });
@@ -973,7 +824,7 @@ document.querySelectorAll("[data-page]").forEach((button) => {
             target.classList.add("active");
         }
 
-        document.querySelectorAll("[data-page]").forEach((item) => {
+        document.querySelectorAll("[data-page]").forEach(item => {
             item.classList.remove("active");
         });
 
@@ -982,26 +833,20 @@ document.querySelectorAll("[data-page]").forEach((button) => {
 });
 
 
-/* =====================================
-   SOUS-MENUS DE GESTION
-===================================== */
+/* SOUS-MENUS */
 
-document.querySelectorAll("[data-section]").forEach((button) => {
+document.querySelectorAll("[data-section]").forEach(button => {
     button.addEventListener("click", () => {
-        const sectionId = button.dataset.section;
+        const section = $(button.dataset.section);
 
-        const section = $(sectionId);
-
-        if (!section) return;
-
-        section.hidden = !section.hidden;
+        if (section) {
+            section.hidden = !section.hidden;
+        }
     });
 });
 
 
-/* =====================================
-   GESTION DES UTILISATEURS
-===================================== */
+/* DEMANDES D'ACCÈS */
 
 async function renderUserRequests() {
     const container = $("users-list");
@@ -1009,28 +854,25 @@ async function renderUserRequests() {
     if (!container || currentRole !== "admin") return;
 
     try {
-        const snapshot = await getDocs(
-            collection(db, "userRequests")
-        );
+        const snapshot = await getDocs(collection(db, "userRequests"));
 
-        const requests = snapshot.docs.map((item) => ({
+        const requests = snapshot.docs.map(item => ({
             id: item.id,
             ...item.data()
         }));
 
-        const pending = requests.filter((item) => {
-            return item.status === "pending";
-        });
+        const pending = requests.filter(item =>
+            item.status === "pending"
+        );
 
-        if (pending.length === 0) {
+        if (!pending.length) {
             container.innerHTML = "<p>Aucune demande en attente.</p>";
             return;
         }
 
-        container.innerHTML = pending.map((item) => `
+        container.innerHTML = pending.map(item => `
             <div class="user-request-card">
                 <h4>${escapeHTML(item.name || "Utilisateur")}</h4>
-
                 <p>${escapeHTML(item.email || "")}</p>
 
                 <button
@@ -1049,42 +891,39 @@ async function renderUserRequests() {
 
     } catch (error) {
         console.error(error);
-
-        container.innerHTML = `
-            <p>Impossible de charger les demandes d'accès.</p>
-        `;
+        container.innerHTML = "<p>Impossible de charger les demandes.</p>";
     }
 }
 
 
-const usersList = $("users-list");
+/* ACTIONS ADMINISTRATEUR */
 
-if (usersList) {
-    usersList.addEventListener("click", async (event) => {
+if ($("users-list")) {
+    $("users-list").addEventListener("click", async event => {
         if (currentRole !== "admin") return;
 
-        const approveButton = event.target.closest("[data-approve-user]");
-        const denyButton = event.target.closest("[data-deny-user]");
+        const approve = event.target.closest("[data-approve-user]");
+        const deny = event.target.closest("[data-deny-user]");
 
-        if (approveButton) {
-            const uid = approveButton.dataset.approveUser;
+        if (approve) {
+            const uid = approve.dataset.approveUser;
 
             try {
                 const requestRef = doc(db, "userRequests", uid);
-                const requestSnapshot = await getDoc(requestRef);
+                const snapshot = await getDoc(requestRef);
 
-                if (!requestSnapshot.exists()) {
+                if (!snapshot.exists()) {
                     alert("Cette demande n'existe plus.");
                     await renderUserRequests();
                     return;
                 }
 
-                const userData = requestSnapshot.data();
+                const data = snapshot.data();
 
                 await setDoc(doc(db, "authorizedUsers", uid), {
                     uid,
-                    name: userData.name || "",
-                    email: userData.email || "",
+                    name: data.name || "",
+                    email: data.email || "",
                     role: "operator",
                     status: "approved",
                     approvedBy: currentUser.uid,
@@ -1094,7 +933,6 @@ if (usersList) {
                 await deleteDoc(requestRef);
 
                 alert("Utilisateur autorisé.");
-
                 await renderUserRequests();
 
             } catch (error) {
@@ -1103,12 +941,10 @@ if (usersList) {
             }
         }
 
-        if (denyButton) {
-            const uid = denyButton.dataset.denyUser;
+        if (deny) {
+            const uid = deny.dataset.denyUser;
 
-            if (!confirm("Voulez-vous vraiment refuser cette demande ?")) {
-                return;
-            }
+            if (!confirm("Voulez-vous refuser cette demande ?")) return;
 
             try {
                 await setDoc(
@@ -1121,7 +957,6 @@ if (usersList) {
                 );
 
                 alert("Demande refusée.");
-
                 await renderUserRequests();
 
             } catch (error) {
@@ -1133,13 +968,10 @@ if (usersList) {
 }
 
 
-/* =====================================
-   AFFICHAGE DU NOM ET DU RÔLE
-===================================== */
+/* INFORMATIONS UTILISATEUR */
 
 function displayUserInformation(user) {
     const element = $("current-user");
-
     if (!element) return;
 
     const name = user.displayName || user.email || "Utilisateur";
@@ -1152,45 +984,34 @@ function displayUserInformation(user) {
 }
 
 
-/* =====================================
-   AFFICHAGE DU MENU UTILISATEURS
-===================================== */
+/* INTERFACE SELON LE RÔLE */
 
 function configureRoleInterface() {
-    const usersButton = document.querySelector(
+    const button = document.querySelector(
         '[data-section="users-section"]'
     );
 
-    if (usersButton) {
-        usersButton.hidden = currentRole !== "admin";
+    if (button) {
+        button.hidden = currentRole !== "admin";
     }
 
-    const usersSection = $("users-section");
-
-    if (usersSection && currentRole !== "admin") {
-        usersSection.hidden = true;
+    if ($("users-section") && currentRole !== "admin") {
+        $("users-section").hidden = true;
     }
 }
 
 
-/* =====================================
-   ÉTAT DE LA CONNEXION INTERNET
-===================================== */
+/* CONNEXION INTERNET */
 
 function updateConnectionStatus(online) {
     const element = $("sync-status");
-
     if (!element) return;
 
-    element.textContent = online
-        ? "En ligne"
-        : "Hors connexion";
+    element.textContent = online ? "En ligne" : "Hors connexion";
 }
 
 
-/* =====================================
-   INITIALISATION DE L'APPLICATION
-===================================== */
+/* INITIALISATION */
 
 async function initializeApplication(user) {
     currentUser = user;
@@ -1206,7 +1027,6 @@ async function initializeApplication(user) {
         showApplication();
 
         displayUserInformation(user);
-
         configureRoleInterface();
 
         await loadData();
@@ -1216,22 +1036,20 @@ async function initializeApplication(user) {
         }
 
     } catch (error) {
-        console.error("Erreur d'autorisation :", error);
+        console.error(error);
 
         showLogin();
 
         alert(
-            "Impossible de vérifier les autorisations. Vérifiez les règles de sécurité Firestore."
+            "Impossible de vérifier les autorisations. Vérifiez les règles Firestore."
         );
     }
 }
 
 
-/* =====================================
-   SURVEILLANCE DE LA CONNEXION UTILISATEUR
-===================================== */
+/* SURVEILLANCE DE L'AUTHENTIFICATION */
 
-onAuthStateChanged(auth, async (user) => {
+onAuthStateChanged(auth, async user => {
     if (user) {
         await initializeApplication(user);
     } else {
@@ -1247,9 +1065,7 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 
-/* =====================================
-   INITIALISATION HORS LIGNE
-===================================== */
+/* INITIALISATION HORS LIGNE */
 
 async function initializeOfflineFeatures() {
     try {
@@ -1258,30 +1074,23 @@ async function initializeOfflineFeatures() {
         const pending = await countPendingOperations();
 
         console.log(
-            "Opérations en attente de synchronisation :",
+            "Opérations en attente :",
             pending
         );
 
-        listenToConnection((online) => {
-            updateConnectionStatus(online);
-        });
+        listenToConnection(updateConnectionStatus);
 
         updateConnectionStatus(isOnline());
 
     } catch (error) {
-        console.error(
-            "Initialisation hors ligne impossible :",
-            error
-        );
+        console.error("Erreur hors ligne :", error);
     }
 }
 
 initializeOfflineFeatures();
 
 
-/* =====================================
-   ENREGISTREMENT DU SERVICE WORKER
-===================================== */
+/* SERVICE WORKER */
 
 if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
@@ -1290,11 +1099,8 @@ if ("serviceWorker" in navigator) {
             .then(() => {
                 console.log("Service Worker enregistré.");
             })
-            .catch((error) => {
-                console.error(
-                    "Erreur Service Worker :",
-                    error
-                );
+            .catch(error => {
+                console.error("Erreur Service Worker :", error);
             });
     });
 }
