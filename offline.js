@@ -1,19 +1,43 @@
-// ==================================================
+// ======================================================
 // DÉPÔT SARAH V2
+// OFFLINE.JS
 // GESTION DU MODE HORS CONNEXION
-// ==================================================
+// ======================================================
+
+
+// ======================================================
+// 1. CONFIGURATION
+// ======================================================
 
 const DB_NAME = "DepotSarahOffline";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = "pendingOperations";
 
 let database = null;
 let syncInProgress = false;
 
+const MAX_ATTEMPTS = 10;
+const PROCESSING_TIMEOUT = 5 * 60 * 1000;
 
-// ==================================================
-// OUVERTURE DE LA BASE INDEXEDDB
-// ==================================================
+
+// ======================================================
+// 2. GÉNÉRATION DES IDENTIFIANTS
+// ======================================================
+
+function generateId() {
+    if (crypto.randomUUID) {
+        return crypto.randomUUID();
+    }
+
+    return "offline_" +
+        Date.now() + "_" +
+        Math.random().toString(36).slice(2);
+}
+
+
+// ======================================================
+// 3. OUVERTURE DE LA BASE INDEXEDDB
+// ======================================================
 
 export function openOfflineDB() {
 
@@ -24,89 +48,172 @@ export function openOfflineDB() {
             return;
         }
 
-        if (!("indexedDB" in window)) {
-            reject(new Error("IndexedDB n'est pas disponible."));
-            return;
-        }
-
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        const request = indexedDB.open(
+            DB_NAME,
+            DB_VERSION
+        );
 
         request.onupgradeneeded = event => {
 
             const db = event.target.result;
 
+            let store;
+
             if (!db.objectStoreNames.contains(STORE_NAME)) {
 
-                const store = db.createObjectStore(
+                store = db.createObjectStore(
                     STORE_NAME,
                     { keyPath: "id" }
                 );
 
+            } else {
+
+                store = event.target.transaction.objectStore(
+                    STORE_NAME
+                );
+
+            }
+
+            if (!store.indexNames.contains("status")) {
                 store.createIndex(
                     "status",
                     "status",
                     { unique: false }
                 );
+            }
 
+            if (!store.indexNames.contains("createdAt")) {
                 store.createIndex(
                     "createdAt",
                     "createdAt",
                     { unique: false }
                 );
             }
+
+            if (!store.indexNames.contains("operationId")) {
+                store.createIndex(
+                    "operationId",
+                    "operationId",
+                    { unique: false }
+                );
+            }
+
         };
 
-        request.onsuccess = event => {
-            database = event.target.result;
+        request.onsuccess = () => {
+
+            database = request.result;
+
+            database.onversionchange = () => {
+                database.close();
+                database = null;
+            };
+
             resolve(database);
+
         };
 
         request.onerror = () => {
             reject(request.error);
         };
+
     });
+
 }
 
 
-// ==================================================
-// CRÉATION D'UN IDENTIFIANT UNIQUE
-// ==================================================
+// ======================================================
+// 4. OUTIL DE TRANSACTION
+// ======================================================
 
-function createOperationId() {
-
-    if (crypto.randomUUID) {
-        return crypto.randomUUID();
-    }
-
-    return (
-        Date.now().toString(36) +
-        Math.random().toString(36).slice(2)
-    );
-}
-
-
-// ==================================================
-// AJOUTER UNE OPÉRATION EN ATTENTE
-// ==================================================
-
-export async function enqueueOperation(type, payload) {
-
-    if (!type || !payload) {
-        throw new Error("Opération invalide.");
-    }
+async function executeTransaction(mode, callback) {
 
     const db = await openOfflineDB();
 
+    return new Promise((resolve, reject) => {
+
+        const transaction = db.transaction(
+            STORE_NAME,
+            mode
+        );
+
+        const store = transaction.objectStore(
+            STORE_NAME
+        );
+
+        let result;
+
+        try {
+            result = callback(store);
+        } catch (error) {
+            reject(error);
+            return;
+        }
+
+        transaction.oncomplete = () => {
+            resolve(result?.result);
+        };
+
+        transaction.onerror = () => {
+            reject(transaction.error);
+        };
+
+        transaction.onabort = () => {
+            reject(
+                transaction.error ||
+                new Error("Transaction IndexedDB annulée.")
+            );
+        };
+
+    });
+
+}
+
+
+// ======================================================
+// 5. ENREGISTRER UNE OPÉRATION EN ATTENTE
+// ======================================================
+
+export async function enqueueOperation(
+    type,
+    payload,
+    operationId = null
+) {
+
+    if (!type || !payload) {
+        throw new Error("Opération ou données manquantes.");
+    }
+
+    const id = operationId || generateId();
+
     const operation = {
-        id: createOperationId(),
+
+        id,
+
+        operationId: id,
+
         type,
-        payload,
+
+        payload: {
+            ...payload,
+            operationId: id
+        },
+
         status: "pending",
+
         attempts: 0,
-        createdAt: new Date().toISOString(),
+
+        createdAt: Date.now(),
+
         lastAttemptAt: null,
+
+        nextAttemptAt: 0,
+
         lastError: null
+
     };
+
+    const db = await openOfflineDB();
 
     return new Promise((resolve, reject) => {
 
@@ -115,24 +222,28 @@ export async function enqueueOperation(type, payload) {
             "readwrite"
         );
 
-        const store = transaction.objectStore(STORE_NAME);
+        const store = transaction.objectStore(
+            STORE_NAME
+        );
 
-        store.add(operation);
+        const request = store.add(operation);
 
-        transaction.oncomplete = () => {
-            resolve(operation);
+        request.onsuccess = () => {
+            resolve(id);
         };
 
-        transaction.onerror = () => {
-            reject(transaction.error);
+        request.onerror = () => {
+            reject(request.error);
         };
+
     });
+
 }
 
 
-// ==================================================
-// RÉCUPÉRER LES OPÉRATIONS EN ATTENTE
-// ==================================================
+// ======================================================
+// 6. RÉCUPÉRER LES OPÉRATIONS EN ATTENTE
+// ======================================================
 
 export async function getPendingOperations() {
 
@@ -145,45 +256,54 @@ export async function getPendingOperations() {
             "readonly"
         );
 
-        const store = transaction.objectStore(STORE_NAME);
+        const store = transaction.objectStore(
+            STORE_NAME
+        );
 
         const request = store.getAll();
 
         request.onsuccess = () => {
 
             const operations = request.result
-                .filter(item => item.status === "pending")
+                .filter(operation =>
+                    operation.status === "pending" ||
+                    operation.status === "processing"
+                )
                 .sort((a, b) =>
-                    a.createdAt.localeCompare(b.createdAt)
+                    a.createdAt - b.createdAt
                 );
 
             resolve(operations);
+
         };
 
         request.onerror = () => {
             reject(request.error);
         };
+
     });
+
 }
 
 
-// ==================================================
-// COMPTER LES OPÉRATIONS EN ATTENTE
-// ==================================================
+// ======================================================
+// 7. COMPTER LES OPÉRATIONS EN ATTENTE
+// ======================================================
 
 export async function countPendingOperations() {
 
     const operations = await getPendingOperations();
 
     return operations.length;
+
 }
 
 
-// ==================================================
-// MODIFIER UNE OPÉRATION
-// ==================================================
+// ======================================================
+// 8. MODIFIER UNE OPÉRATION
+// ======================================================
 
-async function updateOperation(id, changes) {
+export async function updateOperation(id, updates) {
 
     const db = await openOfflineDB();
 
@@ -194,7 +314,9 @@ async function updateOperation(id, changes) {
             "readwrite"
         );
 
-        const store = transaction.objectStore(STORE_NAME);
+        const store = transaction.objectStore(
+            STORE_NAME
+        );
 
         const request = store.get(id);
 
@@ -203,17 +325,14 @@ async function updateOperation(id, changes) {
             const operation = request.result;
 
             if (!operation) {
-                resolve(false);
                 return;
             }
 
-            Object.assign(operation, changes);
+            store.put({
+                ...operation,
+                ...updates
+            });
 
-            store.put(operation);
-        };
-
-        request.onerror = () => {
-            reject(request.error);
         };
 
         transaction.oncomplete = () => {
@@ -223,113 +342,145 @@ async function updateOperation(id, changes) {
         transaction.onerror = () => {
             reject(transaction.error);
         };
+
     });
+
 }
 
 
-// ==================================================
-// MARQUER UNE OPÉRATION COMME TERMINÉE
-// ==================================================
+// ======================================================
+// 9. MARQUER UNE OPÉRATION TERMINÉE
+// ======================================================
 
 export async function markOperationCompleted(id) {
 
     return await updateOperation(id, {
+
         status: "completed",
-        completedAt: new Date().toISOString(),
+
+        completedAt: Date.now(),
+
         lastError: null
+
     });
+
 }
 
 
-// ==================================================
-// ENREGISTRER UNE ERREUR DE SYNCHRONISATION
-// ==================================================
+// ======================================================
+// 10. MARQUER UNE OPÉRATION ÉCHOUÉE
+// ======================================================
 
 export async function markOperationFailed(id, error) {
 
-    const db = await openOfflineDB();
+    const operations = await getPendingOperations();
 
-    return new Promise((resolve, reject) => {
+    const operation = operations.find(
+        item => item.id === id
+    );
 
-        const transaction = db.transaction(
-            STORE_NAME,
-            "readwrite"
-        );
+    if (!operation) {
+        return false;
+    }
 
-        const store = transaction.objectStore(STORE_NAME);
+    const attempts = operation.attempts + 1;
 
-        const request = store.get(id);
+    const delay = Math.min(
+        30000 * Math.pow(2, attempts - 1),
+        60 * 60 * 1000
+    );
 
-        request.onsuccess = () => {
+    const permanentFailure = attempts >= MAX_ATTEMPTS;
 
-            const operation = request.result;
+    return await updateOperation(id, {
 
-            if (!operation) {
-                resolve(false);
-                return;
-            }
+        status: permanentFailure
+            ? "failed"
+            : "pending",
 
-            operation.status = "pending";
-            operation.attempts += 1;
+        attempts,
 
-            operation.lastAttemptAt =
-                new Date().toISOString();
+        nextAttemptAt: Date.now() + delay,
 
-            operation.lastError =
-                String(error?.message || error || "Erreur inconnue");
+        lastAttemptAt: Date.now(),
 
-            store.put(operation);
-        };
+        lastError:
+            error?.message ||
+            String(error || "Erreur inconnue")
 
-        request.onerror = () => {
-            reject(request.error);
-        };
-
-        transaction.oncomplete = () => {
-            resolve(true);
-        };
-
-        transaction.onerror = () => {
-            reject(transaction.error);
-        };
     });
+
 }
 
 
-// ==================================================
-// SYNCHRONISATION DES OPÉRATIONS
-// ==================================================
+// ======================================================
+// 11. RÉINITIALISER LES OPÉRATIONS BLOQUÉES
+// ======================================================
+
+async function recoverStuckOperations() {
+
+    const operations = await getPendingOperations();
+
+    const now = Date.now();
+
+    for (const operation of operations) {
+
+        if (
+            operation.status === "processing" &&
+            now - (operation.lastAttemptAt || 0) >
+            PROCESSING_TIMEOUT
+        ) {
+
+            await updateOperation(operation.id, {
+
+                status: "pending",
+
+                lastError:
+                    "Traitement interrompu. Nouvelle tentative prévue."
+
+            });
+
+        }
+
+    }
+
+}
+
+
+// ======================================================
+// 12. SYNCHRONISATION DES OPÉRATIONS
+// ======================================================
 
 export async function syncPendingOperations(processor) {
 
+    if (syncInProgress) {
+        return {
+            success: false,
+            reason: "Synchronisation déjà en cours."
+        };
+    }
+
     if (!navigator.onLine) {
         return {
-            success: 0,
-            failed: 0,
-            message: "Aucune connexion Internet."
+            success: false,
+            reason: "Aucune connexion Internet."
         };
     }
 
     if (typeof processor !== "function") {
         throw new Error(
-            "Une fonction de traitement est nécessaire."
+            "Un processeur d'opérations est nécessaire."
         );
-    }
-
-    if (syncInProgress) {
-        return {
-            success: 0,
-            failed: 0,
-            message: "Synchronisation déjà en cours."
-        };
     }
 
     syncInProgress = true;
 
-    let success = 0;
+    let completed = 0;
     let failed = 0;
 
     try {
+
+        await recoverStuckOperations();
 
         const operations = await getPendingOperations();
 
@@ -339,15 +490,46 @@ export async function syncPendingOperations(processor) {
                 break;
             }
 
+            if (
+                operation.status !== "pending" ||
+                operation.attempts >= MAX_ATTEMPTS
+            ) {
+                continue;
+            }
+
+            if (
+                operation.nextAttemptAt &&
+                operation.nextAttemptAt > Date.now()
+            ) {
+                continue;
+            }
+
             try {
 
+                await updateOperation(operation.id, {
+
+                    status: "processing",
+
+                    lastAttemptAt: Date.now()
+
+                });
+
+                // Le module app.js fournira le processeur.
                 await processor(operation);
 
-                await markOperationCompleted(operation.id);
+                await markOperationCompleted(
+                    operation.id
+                );
 
-                success++;
+                completed++;
 
             } catch (error) {
+
+                console.error(
+                    "Erreur de synchronisation :",
+                    operation.type,
+                    error
+                );
 
                 await markOperationFailed(
                     operation.id,
@@ -355,25 +537,30 @@ export async function syncPendingOperations(processor) {
                 );
 
                 failed++;
+
             }
+
         }
 
         return {
-            success,
+            success: true,
+            completed,
             failed,
-            message: "Synchronisation terminée."
+            pending: await countPendingOperations()
         };
 
     } finally {
 
         syncInProgress = false;
+
     }
+
 }
 
 
-// ==================================================
-// NETTOYAGE DES OPÉRATIONS TERMINÉES
-// ==================================================
+// ======================================================
+// 13. SUPPRIMER LES OPÉRATIONS TERMINÉES
+// ======================================================
 
 export async function cleanCompletedOperations() {
 
@@ -386,11 +573,13 @@ export async function cleanCompletedOperations() {
             "readwrite"
         );
 
-        const store = transaction.objectStore(STORE_NAME);
+        const store = transaction.objectStore(
+            STORE_NAME
+        );
 
         const request = store.getAll();
 
-        let removed = 0;
+        let deleted = 0;
 
         request.onsuccess = () => {
 
@@ -400,51 +589,159 @@ export async function cleanCompletedOperations() {
 
                     store.delete(operation.id);
 
-                    removed++;
+                    deleted++;
+
                 }
+
             });
+
+        };
+
+        transaction.oncomplete = () => {
+            resolve(deleted);
+        };
+
+        transaction.onerror = () => {
+            reject(transaction.error);
+        };
+
+    });
+
+}
+
+
+// ======================================================
+// 14. SUPPRIMER UNE OPÉRATION ÉCHOUÉE
+// ======================================================
+
+export async function deleteFailedOperation(id) {
+
+    const db = await openOfflineDB();
+
+    return new Promise((resolve, reject) => {
+
+        const transaction = db.transaction(
+            STORE_NAME,
+            "readwrite"
+        );
+
+        const store = transaction.objectStore(
+            STORE_NAME
+        );
+
+        const request = store.get(id);
+
+        request.onsuccess = () => {
+
+            const operation = request.result;
+
+            if (operation && operation.status === "failed") {
+                store.delete(id);
+            }
+
+        };
+
+        transaction.oncomplete = () => {
+            resolve(true);
+        };
+
+        transaction.onerror = () => {
+            reject(transaction.error);
+        };
+
+    });
+
+}
+
+
+// ======================================================
+// 15. RELANCER UNE OPÉRATION ÉCHOUÉE
+// ======================================================
+
+export async function retryFailedOperation(id) {
+
+    return await updateOperation(id, {
+
+        status: "pending",
+
+        attempts: 0,
+
+        nextAttemptAt: 0,
+
+        lastError: null
+
+    });
+
+}
+
+
+// ======================================================
+// 16. ÉTAT DE LA CONNEXION
+// ======================================================
+
+export function isOnline() {
+
+    return navigator.onLine;
+
+}
+
+
+export function listenToConnection(callback) {
+
+    window.addEventListener(
+        "online",
+        () => callback(true)
+    );
+
+    window.addEventListener(
+        "offline",
+        () => callback(false)
+    );
+
+}
+
+
+// ======================================================
+// 17. NOMBRE D'OPÉRATIONS ÉCHOUÉES
+// ======================================================
+
+export async function countFailedOperations() {
+
+    const db = await openOfflineDB();
+
+    return new Promise((resolve, reject) => {
+
+        const transaction = db.transaction(
+            STORE_NAME,
+            "readonly"
+        );
+
+        const store = transaction.objectStore(
+            STORE_NAME
+        );
+
+        const request = store.getAll();
+
+        request.onsuccess = () => {
+
+            const count = request.result.filter(
+                operation => operation.status === "failed"
+            ).length;
+
+            resolve(count);
+
         };
 
         request.onerror = () => {
             reject(request.error);
         };
 
-        transaction.oncomplete = () => {
-            resolve(removed);
-        };
-
-        transaction.onerror = () => {
-            reject(transaction.error);
-        };
     });
+
 }
 
 
-// ==================================================
-// ÉTAT DE LA CONNEXION
-// ==================================================
-
-export function isOnline() {
-    return navigator.onLine;
-}
-
-
-// ==================================================
-// ÉCOUTER LE RETOUR D'INTERNET
-// ==================================================
-
-export function listenToConnection(callback) {
-
-    window.addEventListener("online", () => {
-        callback(true);
-    });
-
-    window.addEventListener("offline", () => {
-        callback(false);
-    });
-}
-
-
-// ==================================================
-// FIN DU MODULE HORS CONNEXION
-// ==================================================
+// ======================================================
+// FIN OFFLINE.JS
+// DÉPÔT SARAH V2
+// ======================================================
