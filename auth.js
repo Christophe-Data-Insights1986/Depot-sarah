@@ -27,6 +27,8 @@ import {
 
 export const ADMIN_EMAIL = "christopheatangana2@gmail.com";
 
+let initialized = false;
+
 // ======================================================
 // ÉLÉMENTS HTML
 // ======================================================
@@ -56,7 +58,7 @@ function showMessage(message, error = false) {
 }
 
 // ======================================================
-// VÉRIFICATION ADMINISTRATEUR
+// ADMINISTRATEUR
 // ======================================================
 
 export function isAdmin(user = auth.currentUser) {
@@ -65,10 +67,34 @@ export function isAdmin(user = auth.currentUser) {
 }
 
 // ======================================================
-// VÉRIFICATION AUTORISATION
+// CRÉATION D'UNE DEMANDE D'ACCÈS
+// ======================================================
+
+async function createAccessRequest(user, name = "") {
+
+    if (isAdmin(user)) return;
+
+    const requestRef = doc(db, "userRequests", user.uid);
+    const requestSnap = await getDoc(requestRef);
+
+    if (!requestSnap.exists()) {
+
+        await setDoc(requestRef, {
+            uid: user.uid,
+            email: user.email || "",
+            name: name || user.displayName || "",
+            status: "pending",
+            createdAt: serverTimestamp()
+        });
+    }
+}
+
+// ======================================================
+// VÉRIFICATION DES AUTORISATIONS
 // ======================================================
 
 export async function checkUserAccess(user) {
+
     if (!user) return false;
 
     if (isAdmin(user)) return true;
@@ -76,8 +102,12 @@ export async function checkUserAccess(user) {
     const userRef = doc(db, "authorizedUsers", user.uid);
     const userSnap = await getDoc(userRef);
 
-    return userSnap.exists() &&
-        userSnap.data().approved === true;
+    if (!userSnap.exists()) return false;
+
+    const data = userSnap.data();
+
+    return data.status === "approved" ||
+        data.approved === true;
 }
 
 // ======================================================
@@ -85,19 +115,26 @@ export async function checkUserAccess(user) {
 // ======================================================
 
 if (loginForm) {
+
     loginForm.addEventListener("submit", async (event) => {
+
         event.preventDefault();
 
         const email = document.getElementById("login-email").value.trim();
         const password = document.getElementById("login-password").value;
 
         try {
+
             showMessage("Connexion en cours...");
 
             await signInWithEmailAndPassword(auth, email, password);
 
         } catch (error) {
-            showMessage("Erreur de connexion : " + error.message, true);
+
+            showMessage(
+                "Erreur de connexion : " + error.message,
+                true
+            );
         }
     });
 }
@@ -107,7 +144,9 @@ if (loginForm) {
 // ======================================================
 
 if (registerForm) {
+
     registerForm.addEventListener("submit", async (event) => {
+
         event.preventDefault();
 
         const name = document.getElementById("register-name").value.trim();
@@ -115,6 +154,7 @@ if (registerForm) {
         const password = document.getElementById("register-password").value;
 
         try {
+
             showMessage("Création du compte...");
 
             const credential = await createUserWithEmailAndPassword(
@@ -128,36 +168,35 @@ if (registerForm) {
             });
 
             if (isAdmin(credential.user)) {
+
                 await setDoc(
                     doc(db, "authorizedUsers", credential.user.uid),
                     {
                         uid: credential.user.uid,
                         email: email,
                         name: name,
+                        status: "approved",
                         approved: true,
                         role: "admin",
                         createdAt: serverTimestamp()
                     }
                 );
+
             } else {
-                await setDoc(
-                    doc(db, "userRequests", credential.user.uid),
-                    {
-                        uid: credential.user.uid,
-                        email: email,
-                        name: name,
-                        status: "pending",
-                        createdAt: serverTimestamp()
-                    }
-                );
+
+                await createAccessRequest(credential.user, name);
             }
 
             showMessage(
-                "Compte créé. En attente de validation si nécessaire."
+                "Compte créé. Votre accès sera disponible après validation."
             );
 
         } catch (error) {
-            showMessage("Erreur d'inscription : " + error.message, true);
+
+            showMessage(
+                "Erreur d'inscription : " + error.message,
+                true
+            );
         }
     });
 }
@@ -167,14 +206,28 @@ if (registerForm) {
 // ======================================================
 
 if (googleLogin) {
+
     googleLogin.addEventListener("click", async () => {
+
         try {
+
             showMessage("Connexion Google en cours...");
 
-            await signInWithPopup(auth, googleProvider);
+            const result = await signInWithPopup(
+                auth,
+                googleProvider
+            );
+
+            if (!isAdmin(result.user)) {
+                await createAccessRequest(result.user);
+            }
 
         } catch (error) {
-            showMessage("Erreur Google : " + error.message, true);
+
+            showMessage(
+                "Erreur Google : " + error.message,
+                true
+            );
         }
     });
 }
@@ -184,9 +237,12 @@ if (googleLogin) {
 // ======================================================
 
 if (showRegister && registerForm && loginForm) {
+
     showRegister.addEventListener("click", () => {
+
         loginForm.style.display = "none";
         registerForm.style.display = "block";
+
         showMessage("Créer un nouveau compte.");
     });
 }
@@ -196,8 +252,14 @@ if (showRegister && registerForm && loginForm) {
 // ======================================================
 
 if (logoutButton) {
+
     logoutButton.addEventListener("click", async () => {
-        await signOut(auth);
+
+        try {
+            await signOut(auth);
+        } catch (error) {
+            console.error("Erreur de déconnexion :", error);
+        }
     });
 }
 
@@ -206,18 +268,27 @@ if (logoutButton) {
 // ======================================================
 
 export function initAuth() {
+
+    if (initialized) return;
+
+    initialized = true;
+
     onAuthStateChanged(auth, async (user) => {
 
         if (!user) {
+
             if (loginScreen) loginScreen.style.display = "block";
             if (appContainer) appContainer.style.display = "none";
+
             return;
         }
 
         try {
+
             const approved = await checkUserAccess(user);
 
             if (!approved) {
+
                 if (loginScreen) loginScreen.style.display = "block";
                 if (appContainer) appContainer.style.display = "none";
 
@@ -249,8 +320,13 @@ export function initAuth() {
             );
 
         } catch (error) {
+
             console.error("Erreur de vérification :", error);
-            showMessage("Impossible de vérifier les autorisations.", true);
+
+            showMessage(
+                "Impossible de vérifier les autorisations. Vérifiez votre connexion.",
+                true
+            );
         }
     });
 }
