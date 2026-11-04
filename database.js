@@ -114,7 +114,6 @@ function normalizeRecord(id, data) {
         id,
         ...data,
 
-        // Stock toujours exprimé en bouteilles
         quantity: stock,
         qty: stock,
         totalBottles: stock,
@@ -256,7 +255,6 @@ export async function addProduct(data) {
         unitsPerCrate: units,
         units,
 
-        // Toutes les quantités sont en bouteilles.
         quantity: stock,
         qty: stock,
         totalBottles: stock,
@@ -331,6 +329,7 @@ export async function updateStock(
     const change = toNumber(bottleChange);
 
     return await runTransaction(db, async transaction => {
+
         const productRef = getDocument(
             "products",
             productId
@@ -433,7 +432,6 @@ export async function createSale(data) {
         throw new Error("Aucun produit dans la vente.");
     }
 
-    // Identifiant stable pour éviter les ventes en double.
     const saleId = data.operationId || generateId();
     const saleRef = getDocument("sales", saleId);
 
@@ -499,7 +497,7 @@ export async function createSale(data) {
         let total = 0;
         let totalCost = 0;
 
-        // Toutes les lectures de produits.
+        // Lecture de tous les produits avant les écritures.
         for (const item of grouped.values()) {
             const productRef = getDocument(
                 "products",
@@ -531,13 +529,24 @@ export async function createSale(data) {
                 );
             }
 
-            const cratePrice =
-                item.cratePrice ||
-                toNumber(product.cratePrice);
+            // CORRECTION : calcul du prix du casier.
+            // Si aucun prix de casier n'est renseigné,
+            // on utilise le prix d'une bouteille multiplié
+            // par le nombre de bouteilles du casier.
 
             const bottlePrice =
-                item.bottlePrice ||
-                toNumber(product.sellingPrice);
+                item.bottlePrice > 0
+                    ? item.bottlePrice
+                    : toNumber(product.sellingPrice);
+
+            const cratePrice =
+                item.cratePrice > 0
+                    ? item.cratePrice
+                    : (
+                        toNumber(product.cratePrice) > 0
+                            ? toNumber(product.cratePrice)
+                            : bottlePrice * units
+                    );
 
             const costPrice = toNumber(
                 product.purchasePrice ??
@@ -582,7 +591,10 @@ export async function createSale(data) {
             throw new Error("Montant de vente invalide.");
         }
 
-        const paymentMode = data.paymentMode || data.paymentType || "";
+        const paymentMode =
+            data.paymentMode ||
+            data.paymentType ||
+            "";
 
         let amountPaid;
 
@@ -632,7 +644,7 @@ export async function createSale(data) {
             customer = customerSnapshot.data();
         }
 
-        // ÉCRITURES : stocks.
+        // ÉCRITURES : mise à jour des stocks.
         for (const item of productSnapshots) {
             transaction.update(item.productRef, {
                 totalBottles: item.newStock,
@@ -818,10 +830,48 @@ export async function createPurchase(data) {
                 )
             };
 
-            group.quantity +=
-                toNumber(item.crates ?? item.quantity) *
-                toNumber(item.unitsPerCrate, 12) +
-                toNumber(item.extraBottles);
+            // CORRECTION :
+            // Si quantity est fourni, il représente déjà
+            // le nombre de bouteilles.
+            // On ne le multiplie donc pas par unitsPerCrate.
+            //
+            // Sinon, on calcule les bouteilles à partir
+            // des casiers et des bouteilles supplémentaires.
+
+            let itemQuantity = 0;
+
+            if (item.quantity !== undefined) {
+                itemQuantity = toNumber(item.quantity);
+            } else {
+                const crates = toNumber(item.crates);
+                const extraBottles = toNumber(
+                    item.extraBottles
+                );
+
+                const units = toNumber(
+                    item.unitsPerCrate,
+                    12
+                );
+
+                itemQuantity =
+                    crates * units +
+                    extraBottles;
+            }
+
+            if (itemQuantity < 0) {
+                throw new Error("Quantité d'achat invalide.");
+            }
+
+            group.quantity += itemQuantity;
+
+            if (
+                item.purchasePrice !== undefined ||
+                item.costPrice !== undefined
+            ) {
+                group.purchasePrice = toNumber(
+                    item.purchasePrice ?? item.costPrice
+                );
+            }
 
             grouped.set(id, group);
         }
@@ -830,6 +880,7 @@ export async function createPurchase(data) {
 
         let total = 0;
 
+        // Lecture de tous les produits.
         for (const item of grouped.values()) {
             const productRef = getDocument(
                 "products",
@@ -854,8 +905,13 @@ export async function createPurchase(data) {
             }
 
             const cost =
-                item.purchasePrice ||
-                toNumber(product.purchasePrice);
+                item.purchasePrice > 0
+                    ? item.purchasePrice
+                    : toNumber(product.purchasePrice);
+
+            if (cost < 0) {
+                throw new Error("Prix d'achat invalide.");
+            }
 
             const oldStock = getStock(product);
             const newStock = oldStock + item.quantity;
@@ -888,6 +944,14 @@ export async function createPurchase(data) {
 
         const supplierId = data.supplierId || null;
 
+        const debt = total - amountPaid;
+
+        if (debt > 0 && !supplierId) {
+            throw new Error(
+                "Un fournisseur doit être sélectionné pour enregistrer une dette."
+            );
+        }
+
         let supplierRef = null;
         let supplier = null;
 
@@ -908,6 +972,7 @@ export async function createPurchase(data) {
             supplier = supplierSnapshot.data();
         }
 
+        // ÉCRITURES : mise à jour des stocks.
         for (const item of prepared) {
             transaction.update(item.productRef, {
                 totalBottles: item.newStock,
@@ -927,8 +992,6 @@ export async function createPurchase(data) {
                 purchaseId
             });
         }
-
-        const debt = total - amountPaid;
 
         if (supplierRef && supplier) {
             transaction.update(supplierRef, {
@@ -1261,8 +1324,6 @@ export async function deleteSale(saleId) {
 
         const sale = saleSnapshot.data();
 
-        // Une vente déjà payée ne peut pas être supprimée
-        // automatiquement : il faut gérer son remboursement.
         if (toNumber(sale.amountPaid) > 0) {
             throw new Error(
                 "Cette vente comporte déjà un paiement. " +
