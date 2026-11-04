@@ -1,1478 +1,1671 @@
-import { auth, db, googleProvider } from "./firebase.js";
+// ======================================================
+// DÉPÔT SARAH V2
+// APP.JS — APPLICATION PRINCIPALE
+// ======================================================
+
+// AUTHENTIFICATION
+import "./auth.js";
+
+// FIREBASE
+import { auth, db } from "./firebase.js";
 
 import {
-    signInWithEmailAndPassword,
-    createUserWithEmailAndPassword,
-    signInWithPopup,
-    signOut,
-    onAuthStateChanged,
-    updateProfile
-} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-
-import {
-    doc,
-    getDoc,
-    setDoc,
     collection,
     getDocs,
-    deleteDoc,
+    doc,
+    setDoc,
+    updateDoc,
     serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
+// BASE DE DONNÉES
 import {
     addProduct,
     getProducts,
+    updateProduct,
+    deleteProduct,
     createSale,
+    getSales,
     addCustomer,
     getCustomers,
-    getAll,
     addSupplier,
     getSuppliers,
-    updateRecord,
-    removeRecord,
     createPurchase,
-    getPurchases
+    getPurchases,
+    addExpense,
+    getExpenses,
+    recordLoss,
+    getLosses,
+    recordCustomerPayment,
+    getFinancialSummary,
+    getCustomerPayments,
+    getStockMovements
 } from "./database.js";
 
+// MODE HORS CONNEXION
 import {
     openOfflineDB,
+    enqueueOperation,
+    syncPendingOperations,
     countPendingOperations,
+    countFailedOperations,
     listenToConnection,
     isOnline
 } from "./offline.js";
 
-/* CONFIGURATION */
+
+// ======================================================
+// 1. VARIABLES GÉNÉRALES
+// ======================================================
 
 const ADMIN_EMAIL = "christopheatangana2@gmail.com";
 
 let currentUser = null;
-let currentRole = null;
+let currentIsAdmin = false;
 
 let products = [];
 let customers = [];
 let sales = [];
-let expenses = [];
-let losses = [];
 let suppliers = [];
 let purchases = [];
+let expenses = [];
+let losses = [];
+
+let loading = false;
 
 const $ = id => document.getElementById(id);
 
-/* OUTILS */
 
-function showMessage(id, message, type = "error") {
-    const element = $(id);
-    if (!element) return;
+// ======================================================
+// 2. OUTILS
+// ======================================================
 
-    element.textContent = message;
-    element.className = `message ${type}`;
-}
+function money(value) {
 
-function formatMoney(value) {
     return new Intl.NumberFormat("fr-FR").format(
         Number(value || 0)
     ) + " FCFA";
+
 }
 
-function localDate() {
-    const now = new Date();
 
-    return [
-        now.getFullYear(),
-        String(now.getMonth() + 1).padStart(2, "0"),
-        String(now.getDate()).padStart(2, "0")
-    ].join("-");
+function number(value) {
+
+    return Number(value || 0);
+
 }
+
 
 function escapeHTML(value) {
-    return String(value ?? "").replace(/[&<>"']/g, character => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#039;"
-    })[character]);
+
+    return String(value ?? "").replace(
+        /[&<>"']/g,
+        character => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#039;"
+        })[character]
+    );
+
 }
 
-/* ÉCRANS */
 
-let pendingPanel = null;
+function notify(message) {
 
-function resetLoginInterface() {
-    if ($("login-form")) {
-        $("login-form").hidden = false;
-        $("login-form").reset();
+    alert(message);
+
+}
+
+
+function dateFormat(value) {
+
+    if (!value) return "Date inconnue";
+
+    const date = value.toDate
+        ? value.toDate()
+        : new Date(value);
+
+    if (isNaN(date.getTime())) {
+        return "Date inconnue";
     }
 
-    if ($("register-form")) {
-        $("register-form").hidden = true;
-        $("register-form").reset();
+    return date.toLocaleString("fr-FR");
+
+}
+
+
+function today() {
+
+    return new Date().toDateString();
+
+}
+
+
+function isToday(item) {
+
+    const date = item.date?.toDate
+        ? item.date.toDate()
+        : new Date(item.date);
+
+    return !isNaN(date.getTime()) &&
+        date.toDateString() === today();
+
+}
+
+
+function showSyncStatus(message) {
+
+    const element = $("sync-status");
+
+    if (element) {
+        element.textContent = message;
     }
 
-    if ($("show-register")) {
-        $("show-register").hidden = false;
-    }
-
-    if ($("google-login")) {
-        $("google-login").hidden = false;
-    }
-
-    showMessage("auth-message", "");
 }
 
-function createPendingPanel() {
-    if (pendingPanel) return;
 
-    pendingPanel = document.createElement("div");
-    pendingPanel.id = "pending-access-screen";
+// ======================================================
+// 3. NAVIGATION
+// ======================================================
 
-    pendingPanel.innerHTML = `
-        <div class="login-card">
-            <h2>Demande d'accès envoyée</h2>
-            <p>Votre compte a été créé.</p>
-            <p>L'administrateur doit autoriser votre accès.</p>
-            <button id="pending-logout">Se déconnecter</button>
-        </div>
-    `;
+function initializeNavigation() {
 
-    document.body.appendChild(pendingPanel);
+    document.querySelectorAll(".nav-button").forEach(button => {
 
-    $("pending-logout").addEventListener("click", async () => {
-        await signOut(auth);
-    });
-}
+        button.addEventListener("click", () => {
 
-function showPendingAccess() {
-    $("login-screen").hidden = true;
-    $("app-container").hidden = true;
+            const page = button.dataset.page;
 
-    createPendingPanel();
-    pendingPanel.hidden = false;
-}
+            document.querySelectorAll(".page").forEach(section => {
 
-function hidePendingAccess() {
-    if (pendingPanel) pendingPanel.hidden = true;
-}
+                section.hidden = true;
+                section.classList.remove("active");
 
-function showLogin() {
-    hidePendingAccess();
-    resetLoginInterface();
-
-    $("login-screen").hidden = false;
-    $("app-container").hidden = true;
-}
-
-function showApplication() {
-    hidePendingAccess();
-
-    $("login-screen").hidden = true;
-    $("app-container").hidden = false;
-}
-
-/* CONNEXION */
-
-const loginForm = $("login-form");
-
-if (loginForm) {
-    loginForm.addEventListener("submit", async event => {
-        event.preventDefault();
-
-        const email = $("login-email").value.trim();
-        const password = $("login-password").value;
-
-        if (!email || !password) {
-            showMessage("auth-message", "Remplissez tous les champs.");
-            return;
-        }
-
-        try {
-            showMessage("auth-message", "Connexion en cours...", "info");
-
-            await signInWithEmailAndPassword(auth, email, password);
-
-        } catch (error) {
-            console.error(error);
-
-            showMessage(
-                "auth-message",
-                "Connexion impossible. Vérifiez votre email et votre mot de passe."
-            );
-        }
-    });
-}
-
-/* INSCRIPTION */
-
-const registerForm = $("register-form");
-
-if (registerForm) {
-    registerForm.addEventListener("submit", async event => {
-        event.preventDefault();
-
-        const name = $("register-name").value.trim();
-        const email = $("register-email").value.trim();
-        const password = $("register-password").value;
-
-        if (!name || !email || !password) {
-            showMessage("auth-message", "Remplissez tous les champs.");
-            return;
-        }
-
-        if (password.length < 6) {
-            showMessage(
-                "auth-message",
-                "Le mot de passe doit contenir au moins 6 caractères."
-            );
-            return;
-        }
-
-        try {
-            showMessage("auth-message", "Création du compte...", "info");
-
-            const credential = await createUserWithEmailAndPassword(
-                auth,
-                email,
-                password
-            );
-
-            await updateProfile(credential.user, {
-                displayName: name
             });
 
-            await setDoc(
-                doc(db, "userRequests", credential.user.uid),
-                {
-                    uid: credential.user.uid,
-                    name,
-                    email,
-                    status: "pending",
-                    requestedAt: serverTimestamp()
-                },
-                { merge: true }
-            );
+            document.querySelectorAll(".nav-button").forEach(item => {
 
-            showMessage(
-                "auth-message",
-                "Compte créé. Votre demande attend l'autorisation de l'administrateur.",
-                "success"
-            );
+                item.classList.remove("active");
 
-        } catch (error) {
-            console.error(error);
+            });
 
-            showMessage(
-                "auth-message",
-                "Impossible de créer le compte. Vérifiez les autorisations Firebase."
-            );
-        }
+            const selectedPage = $(page);
+
+            if (selectedPage) {
+
+                selectedPage.hidden = false;
+                selectedPage.classList.add("active");
+
+            }
+
+            button.classList.add("active");
+
+        });
+
     });
-}
 
-/* AFFICHER L'INSCRIPTION */
 
-const showRegisterButton = $("show-register");
+    document.querySelectorAll(".management-menu button").forEach(button => {
 
-if (showRegisterButton) {
-    showRegisterButton.addEventListener("click", () => {
-        loginForm.hidden = true;
-        registerForm.hidden = false;
+        button.addEventListener("click", () => {
 
-        showRegisterButton.hidden = true;
-        $("google-login").hidden = true;
+            document.querySelectorAll(".management-section").forEach(section => {
 
-        showMessage("auth-message", "");
+                section.hidden = true;
+
+            });
+
+            const section = $(button.dataset.section);
+
+            if (section) {
+                section.hidden = false;
+            }
+
+        });
+
     });
+
 }
 
-/* CONNEXION GOOGLE */
 
-const googleButton = $("google-login");
+// ======================================================
+// 4. CHARGEMENT DES DONNÉES
+// ======================================================
 
-if (googleButton) {
-    googleButton.addEventListener("click", async () => {
-        try {
-            showMessage("auth-message", "Connexion Google...", "info");
+async function loadAllData() {
 
-            await signInWithPopup(auth, googleProvider);
+    if (loading) return;
 
-        } catch (error) {
-            console.error(error);
-            showMessage("auth-message", "La connexion Google a échoué.");
-        }
-    });
-}
+    loading = true;
 
-/* DÉCONNEXION */
-
-if ($("logout-button")) {
-    $("logout-button").addEventListener("click", async () => {
-        try {
-            await signOut(auth);
-        } catch (error) {
-            console.error(error);
-            alert("Erreur pendant la déconnexion.");
-        }
-    });
-}
-
-/* AUTORISATIONS */
-
-async function checkUserAccess(user) {
-    const userRef = doc(db, "authorizedUsers", user.uid);
-    const snapshot = await getDoc(userRef);
-
-    if (user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-        await setDoc(userRef, {
-            uid: user.uid,
-            name: user.displayName || "Administrateur",
-            email: user.email,
-            role: "admin",
-            status: "approved",
-            updatedAt: serverTimestamp()
-        }, { merge: true });
-
-        currentRole = "admin";
-        return true;
-    }
-
-    if (snapshot.exists()) {
-        const data = snapshot.data();
-
-        if (
-            data.status === "approved" &&
-            ["admin", "operator"].includes(data.role)
-        ) {
-            currentRole = data.role;
-            return true;
-        }
-    }
-
-    await setDoc(doc(db, "userRequests", user.uid), {
-        uid: user.uid,
-        name: user.displayName || "",
-        email: user.email || "",
-        status: "pending",
-        requestedAt: serverTimestamp()
-    }, { merge: true });
-
-    return false;
-}
-
-/* CHARGEMENT DES DONNÉES */
-
-async function loadData() {
     try {
-        products = await getProducts();
-        customers = await getCustomers();
-        sales = await getAll("sales");
-        expenses = await getAll("expenses");
-        losses = await getAll("losses");
-        suppliers = await getSuppliers();
-        purchases = await getPurchases();
 
-        renderDashboard();
-        renderProducts();
-        renderCustomers();
-        renderSales();
-        renderSuppliers();
-        renderPurchases();
+        showSyncStatus("Chargement des données...");
 
-        updateSaleProductOptions();
-        updateSaleCustomerOptions();
-        updatePurchaseProductOptions();
-        updatePurchaseSupplierOptions();
+        const results = await Promise.all([
+
+            getProducts(),
+            getCustomers(),
+            getSales(),
+            getSuppliers(),
+            getPurchases(),
+            getExpenses(),
+            getLosses()
+
+        ]);
+
+        products = results[0];
+        customers = results[1];
+        sales = results[2];
+        suppliers = results[3];
+        purchases = results[4];
+        expenses = results[5];
+        losses = results[6];
+
+        renderEverything();
+
+        showSyncStatus(
+            isOnline()
+                ? "Connecté — données synchronisées"
+                : "Hors connexion"
+        );
 
     } catch (error) {
+
         console.error(error);
 
-        alert(
-            "Impossible de charger les données. Vérifiez Firestore et votre connexion."
+        showSyncStatus("Erreur de chargement des données");
+
+        notify(
+            "Impossible de charger les données. Vérifie ta connexion et les règles Firebase."
         );
+
+    } finally {
+
+        loading = false;
+
     }
+
 }
 
-/* TABLEAU DE BORD */
+
+// ======================================================
+// 5. AFFICHAGE GÉNÉRAL
+// ======================================================
+
+function renderEverything() {
+
+    renderDashboard();
+
+    renderProducts();
+
+    renderProductOptions();
+
+    renderCustomers();
+
+    renderCustomerOptions();
+
+    renderSales();
+
+    renderSuppliers();
+
+    renderPurchases();
+
+    renderExpenses();
+
+    renderLosses();
+
+    renderReports();
+
+    renderUsers();
+
+}
+
+
+// ======================================================
+// 6. TABLEAU DE BORD
+// ======================================================
 
 function renderDashboard() {
-    const today = localDate();
-
-    const todaySales = sales.filter(sale =>
-        String(sale.createdAt || "").slice(0, 10) === today
-    );
-
-    const todayExpenses = expenses.filter(expense =>
-        String(expense.createdAt || "").slice(0, 10) === today
-    );
 
     const totalStock = products.reduce(
-        (sum, product) => sum + Number(product.quantity || 0), 0
+        (sum, product) => sum + number(product.totalBottles),
+        0
     );
 
     const stockCost = products.reduce(
         (sum, product) =>
-            sum + Number(product.quantity || 0) * Number(product.cost || 0),
+            sum +
+            number(product.totalBottles) *
+            number(product.purchasePrice),
         0
     );
 
-    const revenue = todaySales.reduce(
-        (sum, sale) => sum + Number(sale.total || 0), 0
-    );
+    const dailySales = sales
+        .filter(isToday)
+        .reduce((sum, sale) => sum + number(sale.total), 0);
 
-    const profit = todaySales.reduce(
-        (sum, sale) => sum + Number(sale.profit || 0), 0
-    );
+    const dailyProfit = sales
+        .filter(isToday)
+        .reduce((sum, sale) => sum + number(sale.profit), 0);
 
-    const expenseTotal = todayExpenses.reduce(
-        (sum, expense) => sum + Number(expense.amount || 0), 0
-    );
+    const dailyExpenses = expenses
+        .filter(isToday)
+        .reduce((sum, expense) => sum + number(expense.amount), 0);
 
     const debts = customers.reduce(
-        (sum, customer) => sum + Number(customer.balance || 0), 0
+        (sum, customer) => sum + number(customer.debt),
+        0
     );
 
-    if ($("stat-products")) {
-        $("stat-products").textContent = products.length;
-    }
+    $("stat-products").textContent = products.length;
 
-    if ($("stat-stock")) {
-        $("stat-stock").textContent = totalStock;
-    }
+    $("stat-stock").textContent = totalStock;
 
-    if ($("stat-stock-cost")) {
-        $("stat-stock-cost").textContent = formatMoney(stockCost);
-    }
+    $("stat-stock-cost").textContent = money(stockCost);
 
-    if ($("stat-sales")) {
-        $("stat-sales").textContent = formatMoney(revenue);
-    }
+    $("stat-sales").textContent = money(dailySales);
 
-    if ($("stat-profit")) {
-        $("stat-profit").textContent = formatMoney(profit - expenseTotal);
-    }
+    $("stat-profit").textContent = money(dailyProfit);
 
-    if ($("stat-expenses")) {
-        $("stat-expenses").textContent = formatMoney(expenseTotal);
-    }
+    $("stat-expenses").textContent = money(dailyExpenses);
 
-    if ($("stat-debts")) {
-        $("stat-debts").textContent = formatMoney(debts);
-    }
+    $("stat-debts").textContent = money(debts);
 
-    renderLowStockAlerts();
-}
 
-/* ALERTES */
+    const alerts = products.filter(product =>
 
-function renderLowStockAlerts() {
-    const container = $("low-stock-alerts");
-    if (!container) return;
+        number(product.totalBottles) <=
+        number(product.lowStockThreshold)
 
-    const lowStock = products.filter(product =>
-        Number(product.quantity || 0) <= Number(product.threshold || 12)
     );
 
-    if (!lowStock.length) {
-        container.innerHTML = "<p>Aucune alerte de stock.</p>";
-        return;
-    }
+    $("low-stock-alerts").innerHTML = alerts.length
 
-    container.innerHTML = lowStock.map(product => `
-        <div class="alert-item">
-            ⚠️ ${escapeHTML(product.name)} :
-            ${Number(product.quantity || 0)} bouteilles restantes
-        </div>
-    `).join("");
+        ? alerts.map(product => `
+
+            <p>
+                ⚠️ ${escapeHTML(product.name)}
+                : ${number(product.totalBottles)} bouteilles restantes
+            </p>
+
+        `).join("")
+
+        : "Aucune alerte de stock faible.";
+
 }
 
-/* PRODUITS */
+
+// ======================================================
+// 7. GESTION DES PRODUITS
+// ======================================================
+
+async function handleProductForm(event) {
+
+    event.preventDefault();
+
+    try {
+
+        const data = {
+
+            name: $("product-name").value.trim(),
+
+            brand: $("product-brand").value.trim(),
+
+            unitsPerCrate: number($("product-units").value),
+
+            totalBottles: number($("product-quantity").value),
+
+            purchasePrice: number($("product-cost").value),
+
+            sellingPrice: number($("product-price").value),
+
+            lowStockThreshold: number($("product-threshold").value)
+
+        };
+
+        await addProduct(data);
+
+        notify("Boisson enregistrée avec succès.");
+
+        event.target.reset();
+
+        $("product-units").value = 12;
+
+        $("product-quantity").value = 0;
+
+        $("product-threshold").value = 12;
+
+        await loadAllData();
+
+    } catch (error) {
+
+        console.error(error);
+
+        notify(error.message || "Erreur lors de l'ajout du produit.");
+
+    }
+
+}
+
 
 function renderProducts() {
+
     const table = $("products-table");
+
     if (!table) return;
 
     if (!products.length) {
+
         table.innerHTML = `
-            <tr><td colspan="5">Aucun produit enregistré.</td></tr>
+            <tr>
+                <td colspan="5">Aucun produit enregistré.</td>
+            </tr>
         `;
+
         return;
+
     }
 
     table.innerHTML = products.map(product => `
+
         <tr>
-            <td>${escapeHTML(product.name)}</td>
-            <td>${Number(product.quantity || 0)}</td>
-            <td>${formatMoney(product.cost)}</td>
-            <td>${formatMoney(product.price)}</td>
-            <td>${Number(product.unitsPerCrate || 12)} / casier</td>
-        </tr>
-    `).join("");
-}
 
-if ($("product-form")) {
-    $("product-form").addEventListener("submit", async event => {
-        event.preventDefault();
+            <td>
+                ${escapeHTML(product.name)}
+                <br>
+                <small>${escapeHTML(product.brand || "")}</small>
+            </td>
 
-        if (!currentUser) return;
+            <td>${number(product.totalBottles)} bouteilles</td>
 
-        const product = {
-            name: $("product-name").value.trim(),
-            brand: $("product-brand").value.trim(),
-            unitsPerCrate: Number($("product-units").value || 12),
-            quantity: Number($("product-quantity").value || 0),
-            cost: Number($("product-cost").value || 0),
-            price: Number($("product-price").value || 0),
-            threshold: Number($("product-threshold").value || 12),
-            active: true,
-            createdBy: currentUser.uid
-        };
+            <td>${money(product.purchasePrice)}</td>
 
-        if (!product.name) {
-            alert("Le nom du produit est obligatoire.");
-            return;
-        }
+            <td>${money(product.sellingPrice)}</td>
 
-        if (
-            product.quantity < 0 ||
-            product.cost < 0 ||
-            product.price < 0 ||
-            product.unitsPerCrate <= 0
-        ) {
-            alert("Vérifiez les quantités et les prix.");
-            return;
-        }
+            <td>
 
-        try {
-            await addProduct(product);
-
-            $("product-form").reset();
-
-            await loadData();
-
-            alert("Produit enregistré avec succès.");
-
-        } catch (error) {
-            console.error(error);
-            alert("Impossible d'enregistrer le produit.");
-        }
-    });
-}
-
-/* LISTE DES BOISSONS POUR LES VENTES */
-
-function updateSaleProductOptions() {
-    const select = $("sale-product");
-    if (!select) return;
-
-    select.innerHTML = '<option value="">Choisir une boisson</option>';
-
-    products.forEach(product => {
-        const option = document.createElement("option");
-
-        option.value = product.id;
-        option.textContent =
-            `${product.name} (${product.quantity || 0} bouteilles)`;
-
-        select.appendChild(option);
-    });
-}
-
-/* LISTE DES CLIENTS */
-
-function updateSaleCustomerOptions() {
-    const select = $("sale-customer");
-    if (!select) return;
-
-    select.innerHTML = '<option value="">Client de passage</option>';
-
-    customers.forEach(customer => {
-        const option = document.createElement("option");
-
-        option.value = customer.id;
-        option.textContent = customer.name;
-
-        select.appendChild(option);
-    });
-}
-
-/* PRÉREMPLISSAGE DES PRIX */
-
-if ($("sale-product")) {
-    $("sale-product").addEventListener("change", () => {
-        const product = products.find(item =>
-            item.id === $("sale-product").value
-        );
-
-        if (!product) return;
-
-        $("sale-crate-price").value =
-            Number(product.price || 0) *
-            Number(product.unitsPerCrate || 12);
-
-        $("sale-bottle-price").value = Number(product.price || 0);
-    });
-}
-
-/* ENREGISTREMENT DES VENTES */
-
-if ($("sale-form")) {
-    $("sale-form").addEventListener("submit", async event => {
-        event.preventDefault();
-
-        if (!currentUser) return;
-
-        const productId = $("sale-product").value;
-
-        const product = products.find(item => item.id === productId);
-
-        if (!product) {
-            alert("Choisissez une boisson.");
-            return;
-        }
-
-        const crates = Number($("sale-crates").value || 0);
-        const bottles = Number($("sale-bottles").value || 0);
-        const units = Number(product.unitsPerCrate || 12);
-
-        const totalBottles = crates * units + bottles;
-
-        if (totalBottles <= 0) {
-            alert("Indiquez une quantité à vendre.");
-            return;
-        }
-
-        if (totalBottles > Number(product.quantity || 0)) {
-            alert("Stock insuffisant.");
-            return;
-        }
-
-        const cratePrice = Number(
-            $("sale-crate-price").value ||
-            Number(product.price || 0) * units
-        );
-
-        const bottlePrice = Number(
-            $("sale-bottle-price").value || product.price || 0
-        );
-
-        const total = crates * cratePrice + bottles * bottlePrice;
-
-        const paymentMethod = $("sale-payment").value;
-
-        const enteredAmount = Number(
-            $("sale-amount-paid").value || 0
-        );
-
-        let amountPaid = enteredAmount;
-
-        if (paymentMethod === "credit") {
-            amountPaid = 0;
-        } else if (paymentMethod !== "partial" && enteredAmount === 0) {
-            amountPaid = total;
-        }
-
-        if (amountPaid < 0 || amountPaid > total) {
-            alert("Vérifiez le montant payé.");
-            return;
-        }
-
-        const customerId = $("sale-customer").value || null;
-
-        const customer = customers.find(item =>
-            item.id === customerId
-        );
-
-        if (amountPaid < total && !customerId) {
-            alert("Sélectionnez un client pour une vente à crédit ou partielle.");
-            return;
-        }
-
-        const sale = {
-            productId,
-            productName: product.name,
-            customerId,
-            customerName: customer?.name || "Client de passage",
-            crates,
-            bottles,
-            totalBottles,
-            quantity: totalBottles,
-            cratePrice,
-            bottlePrice,
-            total,
-            amountPaid,
-            remaining: total - amountPaid,
-            paymentMethod,
-            userId: currentUser.uid
-        };
-
-        try {
-            await createSale(sale);
-
-            $("sale-form").reset();
-
-            await loadData();
-
-            alert("Vente enregistrée avec succès.");
-
-        } catch (error) {
-            console.error(error);
-            alert(error.message || "Impossible d'enregistrer la vente.");
-        }
-    });
-}
-
-/* HISTORIQUE DES VENTES */
-
-function renderSales() {
-    const container = $("sales-history");
-    if (!container) return;
-
-    if (!sales.length) {
-        container.innerHTML = "<p>Aucune vente enregistrée.</p>";
-        return;
-    }
-
-    const sorted = [...sales].sort((a, b) =>
-        String(b.createdAt || "").localeCompare(String(a.createdAt || ""))
-    );
-
-    container.innerHTML = sorted.map(sale => `
-        <div class="sale-card">
-            <h4>${escapeHTML(sale.productName || "Boisson")}</h4>
-            <p>Client : ${escapeHTML(sale.customerName || "Client de passage")}</p>
-            <p>Quantité : ${Number(sale.totalBottles || sale.quantity || 0)} bouteilles</p>
-            <p>Total : ${formatMoney(sale.total)}</p>
-            <p>Payé : ${formatMoney(sale.amountPaid)}</p>
-            <p>Reste : ${formatMoney(sale.remaining)}</p>
-            <p>Date : ${escapeHTML(String(sale.createdAt || "").slice(0, 16))}</p>
-        </div>
-    `).join("");
-}
-
-/* CLIENTS */
-
-function renderCustomers() {
-    const container = $("customers-list");
-    if (!container) return;
-
-    if (!customers.length) {
-        container.innerHTML = "<p>Aucun client enregistré.</p>";
-        return;
-    }
-
-    container.innerHTML = customers.map(customer => `
-        <div class="customer-card">
-            <h4>${escapeHTML(customer.name)}</h4>
-            <p>Téléphone : ${escapeHTML(customer.phone || "Non renseigné")}</p>
-            <p>Solde restant : ${formatMoney(customer.balance)}</p>
-        </div>
-    `).join("");
-}
-
-if ($("customer-form")) {
-    $("customer-form").addEventListener("submit", async event => {
-        event.preventDefault();
-
-        const name = $("customer-name").value.trim();
-        const phone = $("customer-phone").value.trim();
-
-        if (!name) {
-            alert("Le nom du client est obligatoire.");
-            return;
-        }
-
-        try {
-            await addCustomer({
-                name,
-                phone,
-                balance: 0,
-                createdBy: currentUser?.uid || null
-            });
-
-            $("customer-form").reset();
-
-            await loadData();
-
-            alert("Client enregistré avec succès.");
-
-        } catch (error) {
-            console.error(error);
-            alert("Impossible d'enregistrer le client.");
-        }
-    });
-}
-
-/* FOURNISSEURS */
-
-function renderSuppliers() {
-    const container = $("suppliers-list");
-    if (!container) return;
-
-    if (!suppliers.length) {
-        container.innerHTML = "<p>Aucun fournisseur enregistré.</p>";
-    } else {
-        container.innerHTML = suppliers.map(supplier => `
-            <div class="supplier-card">
-                <h4>${escapeHTML(supplier.name)}</h4>
-
-                <p>Téléphone :
-                    ${escapeHTML(supplier.phone || "Non renseigné")}
-                </p>
-
-                <p>Adresse :
-                    ${escapeHTML(supplier.address || "Non renseignée")}
-                </p>
-
-                <p>Contact :
-                    ${escapeHTML(supplier.contact || "Non renseigné")}
-                </p>
-
-                <button type="button"
-                    data-edit-supplier="${escapeHTML(supplier.id)}">
-                    Modifier
+                <button
+                    type="button"
+                    data-stock="${product.id}"
+                >
+                    Ajuster
                 </button>
 
-                <button type="button"
-                    data-delete-supplier="${escapeHTML(supplier.id)}">
+                <button
+                    type="button"
+                    data-delete-product="${product.id}"
+                >
                     Supprimer
                 </button>
-            </div>
-        `).join("");
-    }
 
-    addSupplierFormIfNeeded();
+            </td>
+
+        </tr>
+
+    `).join("");
+
 }
 
-function addSupplierFormIfNeeded() {
-    const section = $("suppliers-section");
 
-    if (!section || $("supplier-form")) return;
+function renderProductOptions() {
 
-    const formContainer = document.createElement("div");
-    formContainer.id = "supplier-form-container";
+    const select = $("sale-product");
 
-    formContainer.innerHTML = `
-        <div class="content-card">
-            <h3>Ajouter un fournisseur</h3>
-
-            <form id="supplier-form">
-
-                <label for="supplier-name">Nom du fournisseur</label>
-                <input type="text" id="supplier-name"
-                    placeholder="Nom du fournisseur" required>
-
-                <label for="supplier-phone">Téléphone</label>
-                <input type="tel" id="supplier-phone"
-                    placeholder="Numéro de téléphone">
-
-                <label for="supplier-address">Adresse</label>
-                <input type="text" id="supplier-address"
-                    placeholder="Adresse du fournisseur">
-
-                <label for="supplier-contact">Personne à contacter</label>
-                <input type="text" id="supplier-contact"
-                    placeholder="Nom du contact">
-
-                <button type="submit">Enregistrer le fournisseur</button>
-
-            </form>
-        </div>
-    `;
-
-    section.insertBefore(formContainer, $("suppliers-list"));
-
-    $("supplier-form").addEventListener("submit", async event => {
-        event.preventDefault();
-
-        if (!currentUser) return;
-
-        const supplier = {
-            name: $("supplier-name").value.trim(),
-            phone: $("supplier-phone").value.trim(),
-            address: $("supplier-address").value.trim(),
-            contact: $("supplier-contact").value.trim(),
-            active: true,
-            createdBy: currentUser.uid
-        };
-
-        if (!supplier.name) {
-            alert("Le nom du fournisseur est obligatoire.");
-            return;
-        }
-
-        try {
-            await addSupplier(supplier);
-
-            $("supplier-form").reset();
-
-            await loadData();
-
-            alert("Fournisseur enregistré avec succès.");
-
-        } catch (error) {
-            console.error(error);
-            alert("Impossible d'enregistrer le fournisseur.");
-        }
-    });
-}
-
-/* ACTIONS SUR LES FOURNISSEURS */
-
-if ($("suppliers-list")) {
-    $("suppliers-list").addEventListener("click", async event => {
-
-        const editButton = event.target.closest("[data-edit-supplier]");
-        const deleteButton = event.target.closest("[data-delete-supplier]");
-
-        if (editButton) {
-            const supplierId = editButton.dataset.editSupplier;
-
-            const supplier = suppliers.find(item =>
-                item.id === supplierId
-            );
-
-            if (!supplier) {
-                alert("Fournisseur introuvable.");
-                return;
-            }
-
-            const name = prompt("Nom du fournisseur :", supplier.name || "");
-            if (name === null) return;
-
-            if (!name.trim()) {
-                alert("Le nom est obligatoire.");
-                return;
-            }
-
-            const phone = prompt("Téléphone :", supplier.phone || "");
-            if (phone === null) return;
-
-            const address = prompt("Adresse :", supplier.address || "");
-            if (address === null) return;
-
-            const contact = prompt(
-                "Personne à contacter :",
-                supplier.contact || ""
-            );
-
-            if (contact === null) return;
-
-            try {
-                await updateRecord("suppliers", supplierId, {
-                    name: name.trim(),
-                    phone: phone.trim(),
-                    address: address.trim(),
-                    contact: contact.trim()
-                });
-
-                await loadData();
-                alert("Fournisseur modifié avec succès.");
-
-            } catch (error) {
-                console.error(error);
-                alert("Impossible de modifier ce fournisseur.");
-            }
-        }
-
-        if (deleteButton) {
-            const supplierId = deleteButton.dataset.deleteSupplier;
-
-            const supplier = suppliers.find(item =>
-                item.id === supplierId
-            );
-
-            if (!supplier) return;
-
-            if (!confirm(
-                `Voulez-vous vraiment supprimer le fournisseur ${supplier.name} ?`
-            )) return;
-
-            try {
-                await removeRecord("suppliers", supplierId);
-
-                await loadData();
-                alert("Fournisseur supprimé.");
-
-            } catch (error) {
-                console.error(error);
-                alert("Impossible de supprimer ce fournisseur.");
-            }
-        }
-    });
-}
-
-/* =========================================
-   APPROVISIONNEMENTS
-========================================= */
-
-/* CRÉATION DU FORMULAIRE */
-
-function createPurchaseFormIfNeeded() {
-    const section = $("purchases-section");
-
-    if (!section || $("purchase-form")) return;
-
-    const formContainer = document.createElement("div");
-    formContainer.id = "purchase-form-container";
-
-    formContainer.innerHTML = `
-        <div class="content-card">
-
-            <h3>Enregistrer un approvisionnement</h3>
-
-            <form id="purchase-form">
-
-                <label for="purchase-supplier">
-                    Fournisseur
-                </label>
-
-                <select id="purchase-supplier" required>
-                    <option value="">Choisir un fournisseur</option>
-                </select>
-
-                <label for="purchase-product">
-                    Boisson
-                </label>
-
-                <select id="purchase-product" required>
-                    <option value="">Choisir une boisson</option>
-                </select>
-
-                <label for="purchase-crates">
-                    Nombre de casiers reçus
-                </label>
-
-                <input
-                    type="number"
-                    id="purchase-crates"
-                    min="0"
-                    value="0"
-                    required
-                >
-
-                <label for="purchase-bottles">
-                    Bouteilles supplémentaires
-                </label>
-
-                <input
-                    type="number"
-                    id="purchase-bottles"
-                    min="0"
-                    value="0"
-                    required
-                >
-
-                <label for="purchase-unit-cost">
-                    Prix d'achat par bouteille (FCFA)
-                </label>
-
-                <input
-                    type="number"
-                    id="purchase-unit-cost"
-                    min="1"
-                    required
-                >
-
-                <label for="purchase-note">
-                    Observation
-                </label>
-
-                <textarea
-                    id="purchase-note"
-                    placeholder="Informations complémentaires (facultatif)"
-                ></textarea>
-
-                <div class="purchase-total">
-                    <h3>Quantité totale reçue</h3>
-                    <strong id="purchase-quantity-preview">0 bouteille</strong>
-
-                    <h3>Coût total</h3>
-                    <strong id="purchase-total-preview">0 FCFA</strong>
-                </div>
-
-                <button type="submit">
-                    Enregistrer l'approvisionnement
-                </button>
-
-            </form>
-
-        </div>
-    `;
-
-    section.insertBefore(formContainer, $("management-purchases"));
-
-    updatePurchaseProductOptions();
-    updatePurchaseSupplierOptions();
-
-    const inputs = [
-        "purchase-product",
-        "purchase-crates",
-        "purchase-bottles",
-        "purchase-unit-cost"
-    ];
-
-    inputs.forEach(id => {
-        $(id).addEventListener("input", updatePurchasePreview);
-        $(id).addEventListener("change", updatePurchasePreview);
-    });
-
-    $("purchase-product").addEventListener("change", () => {
-        const product = products.find(item =>
-            item.id === $("purchase-product").value
-        );
-
-        if (product) {
-            $("purchase-unit-cost").value =
-                Number(product.cost || 0);
-        }
-
-        updatePurchasePreview();
-    });
-
-    $("purchase-form").addEventListener("submit", submitPurchase);
-}
-
-/* LISTE DES FOURNISSEURS */
-
-function updatePurchaseSupplierOptions() {
-    const select = $("purchase-supplier");
     if (!select) return;
-
-    const previousValue = select.value;
-
-    select.innerHTML = `
-        <option value="">Choisir un fournisseur</option>
-    `;
-
-    suppliers
-        .filter(supplier => supplier.active !== false)
-        .forEach(supplier => {
-            const option = document.createElement("option");
-
-            option.value = supplier.id;
-            option.textContent = supplier.name;
-
-            select.appendChild(option);
-        });
-
-    if (suppliers.some(item => item.id === previousValue)) {
-        select.value = previousValue;
-    }
-}
-
-/* LISTE DES PRODUITS */
-
-function updatePurchaseProductOptions() {
-    const select = $("purchase-product");
-    if (!select) return;
-
-    const previousValue = select.value;
 
     select.innerHTML = `
         <option value="">Choisir une boisson</option>
     `;
 
-    products
-        .filter(product => product.active !== false)
-        .forEach(product => {
-            const option = document.createElement("option");
+    products.forEach(product => {
 
-            option.value = product.id;
-            option.textContent =
-                `${product.name} (${product.quantity || 0} bouteilles)`;
+        select.innerHTML += `
 
-            select.appendChild(option);
-        });
+            <option value="${product.id}">
 
-    if (products.some(item => item.id === previousValue)) {
-        select.value = previousValue;
-    }
+                ${escapeHTML(product.name)}
+                — Stock : ${number(product.totalBottles)}
+
+            </option>
+
+        `;
+
+    });
+
 }
 
-/* CALCUL AUTOMATIQUE */
 
-function updatePurchasePreview() {
-    const product = products.find(item =>
-        item.id === $("purchase-product")?.value
+// ======================================================
+// 8. AJUSTEMENT DU STOCK
+// ======================================================
+
+async function adjustStock(productId) {
+
+    const product = products.find(item => item.id === productId);
+
+    if (!product) return;
+
+    const answer = prompt(
+        "Entrez la variation du stock en bouteilles.\n" +
+        "Exemple : 12 pour ajouter 12 bouteilles.\n" +
+        "-3 pour retirer 3 bouteilles."
     );
 
-    const crates = Number($("purchase-crates")?.value || 0);
-    const bottles = Number($("purchase-bottles")?.value || 0);
-    const unitCost = Number($("purchase-unit-cost")?.value || 0);
+    if (answer === null) return;
 
-    const units = Number(product?.unitsPerCrate || 12);
+    const variation = Number(answer);
 
-    const quantity = crates * units + bottles;
-    const total = quantity * unitCost;
+    if (!Number.isInteger(variation) || variation === 0) {
 
-    if ($("purchase-quantity-preview")) {
-        $("purchase-quantity-preview").textContent =
-            `${quantity} bouteille(s)`;
-    }
+        notify("Quantité invalide.");
 
-    if ($("purchase-total-preview")) {
-        $("purchase-total-preview").textContent =
-            formatMoney(total);
-    }
-}
-
-/* ENREGISTREMENT D'UN APPROVISIONNEMENT */
-
-async function submitPurchase(event) {
-    event.preventDefault();
-
-    if (!currentUser) {
-        alert("Vous devez être connecté.");
         return;
+
     }
-
-    const supplierId = $("purchase-supplier").value;
-    const productId = $("purchase-product").value;
-
-    const crates = Number($("purchase-crates").value || 0);
-    const bottles = Number($("purchase-bottles").value || 0);
-    const unitCost = Number($("purchase-unit-cost").value || 0);
-
-    const supplier = suppliers.find(item =>
-        item.id === supplierId
-    );
-
-    const product = products.find(item =>
-        item.id === productId
-    );
-
-    if (!supplier) {
-        alert("Sélectionnez un fournisseur valide.");
-        return;
-    }
-
-    if (!product) {
-        alert("Sélectionnez une boisson valide.");
-        return;
-    }
-
-    if (
-        !Number.isInteger(crates) ||
-        !Number.isInteger(bottles) ||
-        crates < 0 ||
-        bottles < 0 ||
-        (crates === 0 && bottles === 0)
-    ) {
-        alert("Indiquez une quantité valide.");
-        return;
-    }
-
-    if (!Number.isFinite(unitCost) || unitCost <= 0) {
-        alert("Le prix d'achat doit être supérieur à zéro.");
-        return;
-    }
-
-    const units = Number(product.unitsPerCrate || 12);
-    const quantity = crates * units + bottles;
-    const total = quantity * unitCost;
-
-    const confirmation = confirm(
-        `Confirmer cet approvisionnement ?\n\n` +
-        `Boisson : ${product.name}\n` +
-        `Fournisseur : ${supplier.name}\n` +
-        `Quantité : ${quantity} bouteilles\n` +
-        `Coût total : ${formatMoney(total)}`
-    );
-
-    if (!confirmation) return;
-
-    const purchase = {
-        productId,
-        supplierId,
-        crates,
-        bottles,
-        unitCost,
-        note: $("purchase-note").value.trim(),
-        userId: currentUser.uid
-    };
 
     try {
-        const button = $("purchase-form").querySelector(
-            'button[type="submit"]'
+
+        const { updateStock } = await import("./database.js");
+
+        await updateStock(
+            productId,
+            variation,
+            "Ajustement manuel"
         );
 
-        button.disabled = true;
-        button.textContent = "Enregistrement en cours...";
+        notify("Stock actualisé.");
 
-        await createPurchase(purchase);
-
-        $("purchase-form").reset();
-
-        await loadData();
-
-        updatePurchasePreview();
-
-        alert(
-            `Approvisionnement enregistré avec succès !\n\n` +
-            `${quantity} bouteilles ajoutées au stock.`
-        );
+        await loadAllData();
 
     } catch (error) {
-        console.error(error);
 
-        alert(
-            error.message ||
-            "Impossible d'enregistrer cet approvisionnement."
-        );
+        notify(error.message);
 
-    } finally {
-        const button = $("purchase-form")?.querySelector(
-            'button[type="submit"]'
-        );
-
-        if (button) {
-            button.disabled = false;
-            button.textContent = "Enregistrer l'approvisionnement";
-        }
     }
+
 }
 
-/* HISTORIQUE DES APPROVISIONNEMENTS */
 
-function renderPurchases() {
-    const containers = [
-        $("management-purchases"),
-        $("purchases-list")
-    ].filter(Boolean);
+// ======================================================
+// 9. SUPPRESSION D'UN PRODUIT
+// ======================================================
 
-    if (!containers.length) return;
+async function removeProduct(productId) {
 
-    if (!purchases.length) {
-        containers.forEach(container => {
-            container.innerHTML =
-                "<p>Aucun approvisionnement enregistré.</p>";
-        });
+    if (!currentIsAdmin) {
 
-        createPurchaseFormIfNeeded();
+        notify("Seul l'administrateur peut supprimer un produit.");
+
+        return;
+
+    }
+
+    if (!confirm("Confirmer la suppression de cette boisson ?")) {
         return;
     }
 
-    const sorted = [...purchases].sort((a, b) =>
-        String(b.createdAt || "").localeCompare(
-            String(a.createdAt || "")
-        )
-    );
+    try {
 
-    const html = sorted.map(purchase => `
-        <div class="purchase-card">
+        await deleteProduct(productId);
 
-            <h4>${escapeHTML(purchase.productName || "Boisson")}</h4>
+        notify("Produit supprimé.");
 
-            <p>
-                Fournisseur :
-                ${escapeHTML(purchase.supplierName || "Non renseigné")}
-            </p>
+        await loadAllData();
 
-            <p>
-                Casiers :
-                ${Number(purchase.crates || 0)}
-            </p>
+    } catch (error) {
 
-            <p>
-                Bouteilles supplémentaires :
-                ${Number(purchase.bottles || 0)}
-            </p>
+        notify(error.message);
 
-            <p>
-                Quantité totale :
-                <strong>${Number(purchase.quantity || 0)} bouteilles</strong>
-            </p>
+    }
 
-            <p>
-                Prix d'achat par bouteille :
-                ${formatMoney(purchase.unitCost)}
-            </p>
-
-            <p>
-                Coût total :
-                <strong>${formatMoney(purchase.totalCost)}</strong>
-            </p>
-
-            <p>
-                Observation :
-                ${escapeHTML(purchase.note || "Aucune")}
-            </p>
-
-            <p>
-                Date :
-                ${escapeHTML(String(purchase.createdAt || "").slice(0, 16))}
-            </p>
-
-        </div>
-    `).join("");
-
-    containers.forEach(container => {
-        container.innerHTML = html;
-    });
-
-    createPurchaseFormIfNeeded();
 }
 
-/* NAVIGATION PRINCIPALE */
 
-document.querySelectorAll("[data-page]").forEach(button => {
-    button.addEventListener("click", () => {
-        const pageName = button.dataset.page;
+// ======================================================
+// 10. GESTION DES CLIENTS
+// ======================================================
 
-        document.querySelectorAll(".page").forEach(page => {
-            page.classList.remove("active");
-            page.hidden = true;
-        });
+async function handleCustomerForm(event) {
 
-        const target = $(pageName);
-
-        if (target) {
-            target.hidden = false;
-            target.classList.add("active");
-        }
-
-        document.querySelectorAll("[data-page]").forEach(item => {
-            item.classList.remove("active");
-        });
-
-        button.classList.add("active");
-    });
-});
-
-/* SOUS-MENUS */
-
-document.querySelectorAll("[data-section]").forEach(button => {
-    button.addEventListener("click", () => {
-        const section = $(button.dataset.section);
-
-        if (section) {
-            section.hidden = !section.hidden;
-
-            if (
-                button.dataset.section === "purchases-section" &&
-                !section.hidden
-            ) {
-                createPurchaseFormIfNeeded();
-                updatePurchaseProductOptions();
-                updatePurchaseSupplierOptions();
-                updatePurchasePreview();
-            }
-        }
-    });
-});
-
-/* DEMANDES D'ACCÈS */
-
-async function renderUserRequests() {
-    const container = $("users-list");
-
-    if (!container || currentRole !== "admin") return;
+    event.preventDefault();
 
     try {
-        const snapshot = await getDocs(collection(db, "userRequests"));
+
+        await addCustomer({
+
+            name: $("customer-name").value.trim(),
+
+            phone: $("customer-phone").value.trim()
+
+        });
+
+        notify("Client enregistré.");
+
+        event.target.reset();
+
+        await loadAllData();
+
+    } catch (error) {
+
+        notify(error.message);
+
+    }
+
+}
+
+
+function renderCustomers() {
+
+    const container = $("customers-list");
+
+    if (!container) return;
+
+    if (!customers.length) {
+
+        container.textContent = "Aucun client enregistré.";
+
+        return;
+
+    }
+
+    container.innerHTML = customers.map(customer => `
+
+        <div class="content-card">
+
+            <h4>${escapeHTML(customer.name)}</h4>
+
+            <p>Téléphone : ${escapeHTML(customer.phone || "-")}</p>
+
+            <p>Dette : <strong>${money(customer.debt)}</strong></p>
+
+            ${
+                number(customer.debt) > 0
+                    ? `<button data-pay-customer="${customer.id}">
+                        Enregistrer un paiement
+                       </button>`
+                    : ""
+            }
+
+        </div>
+
+    `).join("");
+
+}
+
+
+function renderCustomerOptions() {
+
+    const select = $("sale-customer");
+
+    if (!select) return;
+
+    select.innerHTML = `
+        <option value="">Client de passage</option>
+    `;
+
+    customers.forEach(customer => {
+
+        select.innerHTML += `
+
+            <option value="${customer.id}">
+
+                ${escapeHTML(customer.name)}
+
+            </option>
+
+        `;
+
+    });
+
+}
+
+
+// ======================================================
+// 11. PAIEMENT DES DETTES CLIENTS
+// ======================================================
+
+async function payCustomer(customerId) {
+
+    const customer = customers.find(item => item.id === customerId);
+
+    if (!customer) return;
+
+    const answer = prompt(
+        `Dette actuelle : ${money(customer.debt)}\nMontant reçu :`
+    );
+
+    if (answer === null) return;
+
+    const amount = Number(answer);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+
+        notify("Montant invalide.");
+
+        return;
+
+    }
+
+    const method = prompt(
+        "Mode de paiement : Espèces, Orange Money ou MTN MoMo",
+        "Espèces"
+    );
+
+    if (method === null) return;
+
+    try {
+
+        await recordCustomerPayment({
+
+            customerId,
+
+            amount,
+
+            method
+
+        });
+
+        notify("Paiement enregistré.");
+
+        await loadAllData();
+
+    } catch (error) {
+
+        notify(error.message);
+
+    }
+
+}
+
+
+// ======================================================
+// 12. GESTION DES VENTES
+// ======================================================
+
+async function handleSaleForm(event) {
+
+    event.preventDefault();
+
+    const productId = $("sale-product").value;
+
+    const product = products.find(item => item.id === productId);
+
+    if (!product) {
+
+        notify("Sélectionne une boisson.");
+
+        return;
+
+    }
+
+    const crates = number($("sale-crates").value);
+
+    const extraBottles = number($("sale-bottles").value);
+
+    if (crates <= 0 && extraBottles <= 0) {
+
+        notify("Entre une quantité à vendre.");
+
+        return;
+
+    }
+
+    const quantity =
+        crates * number(product.unitsPerCrate) +
+        extraBottles;
+
+    if (quantity > number(product.totalBottles)) {
+
+        notify("Stock insuffisant.");
+
+        return;
+
+    }
+
+    const customerId = $("sale-customer").value || null;
+
+    const customer = customers.find(
+        item => item.id === customerId
+    );
+
+    const paymentMode = $("sale-payment").value;
+
+    const cratePriceInput = $("sale-crate-price").value;
+
+    const bottlePriceInput = $("sale-bottle-price").value;
+
+    const cratePrice = cratePriceInput === ""
+        ? number(product.cratePrice)
+        : number(cratePriceInput);
+
+    const bottlePrice = bottlePriceInput === ""
+        ? number(product.sellingPrice)
+        : number(bottlePriceInput);
+
+    const total =
+        crates * cratePrice +
+        extraBottles * bottlePrice;
+
+    if (total <= 0) {
+
+        notify("Le montant de la vente est invalide.");
+
+        return;
+
+    }
+
+    let amountPaid;
+
+    if (paymentMode === "credit") {
+
+        amountPaid = 0;
+
+    } else if (paymentMode === "partial") {
+
+        amountPaid = number($("sale-amount-paid").value);
+
+    } else {
+
+        amountPaid = total;
+
+    }
+
+    if (amountPaid < 0 || amountPaid > total) {
+
+        notify("Montant payé invalide.");
+
+        return;
+
+    }
+
+    if (amountPaid < total && !customerId) {
+
+        notify("Sélectionne un client pour enregistrer une dette.");
+
+        return;
+
+    }
+
+    const saleData = {
+
+        items: [{
+
+            productId,
+
+            crates,
+
+            extraBottles,
+
+            cratePrice,
+
+            bottlePrice
+
+        }],
+
+        customerId,
+
+        customerName: customer?.name || "Client comptant",
+
+        paymentMode,
+
+        paymentMethod: paymentMode,
+
+        amountPaid
+
+    };
+
+
+    try {
+
+        if (!isOnline()) {
+
+            const operationId = await enqueueOperation(
+                "createSale",
+                saleData
+            );
+
+            notify(
+                "Vente conservée sur ce téléphone. " +
+                "Elle sera envoyée à Firebase dès le retour d'Internet.\n" +
+                "Référence : " + operationId
+            );
+
+            event.target.reset();
+
+            await updateSyncStatus();
+
+            return;
+
+        }
+
+
+        await createSale(saleData);
+
+        notify("Vente enregistrée avec succès.");
+
+        event.target.reset();
+
+        await loadAllData();
+
+    } catch (error) {
+
+        console.error(error);
+
+        notify(error.message || "Impossible d'enregistrer la vente.");
+
+    }
+
+}
+
+
+// ======================================================
+// 13. HISTORIQUE DES VENTES
+// ======================================================
+
+function renderSales() {
+
+    const container = $("sales-history");
+
+    if (!container) return;
+
+    if (!sales.length) {
+
+        container.textContent = "Aucune vente enregistrée.";
+
+        return;
+
+    }
+
+    const ordered = [...sales].sort((a, b) =>
+
+        new Date(b.date) - new Date(a.date)
+
+    );
+
+    container.innerHTML = ordered.map(sale => `
+
+        <div class="content-card">
+
+            <h4>Vente du ${dateFormat(sale.date)}</h4>
+
+            <p>Client : ${escapeHTML(sale.customerName || "Client comptant")}</p>
+
+            <p>Montant : <strong>${money(sale.total)}</strong></p>
+
+            <p>Payé : ${money(sale.amountPaid)}</p>
+
+            <p>Dette : ${money(sale.debt)}</p>
+
+            <p>Bénéfice estimé : ${money(sale.profit)}</p>
+
+            <p>Mode : ${escapeHTML(sale.paymentMethod || "-")}</p>
+
+        </div>
+
+    `).join("");
+
+}
+
+
+// ======================================================
+// 14. FOURNISSEURS
+// ======================================================
+
+function renderSuppliers() {
+
+    const container = $("suppliers-list");
+
+    if (!container) return;
+
+    container.innerHTML = suppliers.length
+
+        ? suppliers.map(supplier => `
+
+            <div class="content-card">
+
+                <h4>${escapeHTML(supplier.name)}</h4>
+
+                <p>Téléphone : ${escapeHTML(supplier.phone || "-")}</p>
+
+                <p>Dette : ${money(supplier.debt)}</p>
+
+            </div>
+
+        `).join("")
+
+        : "Aucun fournisseur enregistré.";
+
+}
+
+
+// ======================================================
+// 15. APPROVISIONNEMENTS
+// ======================================================
+
+function renderPurchases() {
+
+    const html = purchases.length
+
+        ? purchases.map(purchase => `
+
+            <div class="content-card">
+
+                <p>Date : ${dateFormat(purchase.date)}</p>
+
+                <p>Fournisseur : ${escapeHTML(purchase.supplierName || "-")}</p>
+
+                <p>Total : ${money(purchase.total)}</p>
+
+                <p>Payé : ${money(purchase.amountPaid)}</p>
+
+                <p>Dette : ${money(purchase.debt)}</p>
+
+            </div>
+
+        `).join("")
+
+        : "Aucun approvisionnement enregistré.";
+
+    if ($("purchases-list")) {
+        $("purchases-list").innerHTML = html;
+    }
+
+    if ($("management-purchases")) {
+        $("management-purchases").innerHTML = html;
+    }
+
+}
+
+
+// ======================================================
+// 16. DÉPENSES
+// ======================================================
+
+function renderExpenses() {
+
+    const container = $("expenses-list");
+
+    if (!container) return;
+
+    container.innerHTML = expenses.length
+
+        ? expenses.map(expense => `
+
+            <div class="content-card">
+
+                <h4>${escapeHTML(expense.title)}</h4>
+
+                <p>Catégorie : ${escapeHTML(expense.category)}</p>
+
+                <p>Montant : ${money(expense.amount)}</p>
+
+                <p>Date : ${dateFormat(expense.date)}</p>
+
+            </div>
+
+        `).join("")
+
+        : "Aucune dépense enregistrée.";
+
+}
+
+
+// ======================================================
+// 17. PERTES
+// ======================================================
+
+function renderLosses() {
+
+    const container = $("losses-list");
+
+    if (!container) return;
+
+    container.innerHTML = losses.length
+
+        ? losses.map(loss => `
+
+            <div class="content-card">
+
+                <h4>${escapeHTML(loss.productName)}</h4>
+
+                <p>Quantité perdue : ${number(loss.quantity)}</p>
+
+                <p>Motif : ${escapeHTML(loss.reason)}</p>
+
+                <p>Valeur estimée : ${money(loss.estimatedValue)}</p>
+
+            </div>
+
+        `).join("")
+
+        : "Aucune perte enregistrée.";
+
+}
+
+
+// ======================================================
+// 18. FORMULAIRES DE GESTION
+// ======================================================
+
+function createManagementForms() {
+
+    // FOURNISSEURS
+
+    $("suppliers-section").insertAdjacentHTML(
+        "afterbegin",
+        `
+        <form id="supplier-form">
+
+            <h4>Ajouter un fournisseur</h4>
+
+            <input id="supplier-name"
+                placeholder="Nom du fournisseur"
+                required>
+
+            <input id="supplier-phone"
+                placeholder="Téléphone">
+
+            <button>Enregistrer</button>
+
+        </form>
+        `
+    );
+
+
+    // APPROVISIONNEMENTS
+
+    $("purchases-section").insertAdjacentHTML(
+        "afterbegin",
+        `
+        <form id="purchase-form">
+
+            <h4>Nouvel approvisionnement</h4>
+
+            <label>Boisson</label>
+
+            <select id="purchase-product" required></select>
+
+            <label>Nombre de casiers</label>
+
+            <input id="purchase-crates"
+                type="number" min="0" value="0">
+
+            <label>Bouteilles supplémentaires</label>
+
+            <input id="purchase-bottles"
+                type="number" min="0" value="0">
+
+            <label>Prix d'achat par bouteille</label>
+
+            <input id="purchase-cost"
+                type="number" min="0" required>
+
+            <label>Montant payé</label>
+
+            <input id="purchase-paid"
+                type="number" min="0" value="0">
+
+            <label>Fournisseur</label>
+
+            <select id="purchase-supplier">
+                <option value="">Aucun fournisseur</option>
+            </select>
+
+            <button>Enregistrer l'achat</button>
+
+        </form>
+        `
+    );
+
+
+    // DÉPENSES
+
+    $("expenses-section").insertAdjacentHTML(
+        "afterbegin",
+        `
+        <form id="expense-form">
+
+            <h4>Nouvelle dépense</h4>
+
+            <input id="expense-title"
+                placeholder="Nom de la dépense"
+                required>
+
+            <input id="expense-category"
+                placeholder="Catégorie">
+
+            <input id="expense-amount"
+                type="number" min="1"
+                placeholder="Montant FCFA"
+                required>
+
+            <textarea id="expense-description"
+                placeholder="Description"></textarea>
+
+            <button>Enregistrer la dépense</button>
+
+        </form>
+        `
+    );
+
+
+    // PERTES
+
+    $("losses-section").insertAdjacentHTML(
+        "afterbegin",
+        `
+        <form id="loss-form">
+
+            <h4>Enregistrer une perte</h4>
+
+            <select id="loss-product" required></select>
+
+            <input id="loss-quantity"
+                type="number" min="1"
+                placeholder="Nombre de bouteilles"
+                required>
+
+            <input id="loss-reason"
+                placeholder="Motif : casse, perte..."
+                required>
+
+            <button>Enregistrer la perte</button>
+
+        </form>
+        `
+    );
+
+
+    refreshManagementOptions();
+
+}
+
+
+function refreshManagementOptions() {
+
+    const productSelect = $("purchase-product");
+
+    const supplierSelect = $("purchase-supplier");
+
+    const lossSelect = $("loss-product");
+
+
+    if (productSelect) {
+
+        productSelect.innerHTML = products.map(product => `
+
+            <option value="${product.id}">
+                ${escapeHTML(product.name)}
+            </option>
+
+        `).join("");
+
+    }
+
+
+    if (lossSelect) {
+
+        lossSelect.innerHTML = products.map(product => `
+
+            <option value="${product.id}">
+                ${escapeHTML(product.name)}
+            </option>
+
+        `).join("");
+
+    }
+
+
+    if (supplierSelect) {
+
+        supplierSelect.innerHTML = `
+            <option value="">Aucun fournisseur</option>
+        `;
+
+        suppliers.forEach(supplier => {
+
+            supplierSelect.innerHTML += `
+
+                <option value="${supplier.id}">
+                    ${escapeHTML(supplier.name)}
+                </option>
+
+            `;
+
+        });
+
+    }
+
+}
+
+
+// ======================================================
+// 19. ENREGISTREMENT FOURNISSEUR
+// ======================================================
+
+async function handleSupplierForm(event) {
+
+    event.preventDefault();
+
+    try {
+
+        await addSupplier({
+
+            name: $("supplier-name").value.trim(),
+
+            phone: $("supplier-phone").value.trim()
+
+        });
+
+        notify("Fournisseur enregistré.");
+
+        event.target.reset();
+
+        await loadAllData();
+
+    } catch (error) {
+
+        notify(error.message);
+
+    }
+
+}
+
+
+// ======================================================
+// 20. ENREGISTREMENT ACHAT
+// ======================================================
+
+async function handlePurchaseForm(event) {
+
+    event.preventDefault();
+
+    const productId = $("purchase-product").value;
+
+    const product = products.find(item => item.id === productId);
+
+    if (!product) {
+
+        notify("Produit introuvable.");
+
+        return;
+
+    }
+
+    const crates = number($("purchase-crates").value);
+
+    const extraBottles = number($("purchase-bottles").value);
+
+    const purchasePrice = number($("purchase-cost").value);
+
+    const quantity =
+        crates * number(product.unitsPerCrate) +
+        extraBottles;
+
+    if (quantity <= 0 || purchasePrice <= 0) {
+
+        notify("Vérifie les quantités et le prix d'achat.");
+
+        return;
+
+    }
+
+    const total = quantity * purchasePrice;
+
+    let amountPaid = $("purchase-paid").value === ""
+        ? total
+        : number($("purchase-paid").value);
+
+    if (amountPaid > total) {
+
+        notify("Le paiement dépasse le montant de l'achat.");
+
+        return;
+
+    }
+
+    const supplierId = $("purchase-supplier").value || null;
+
+    if (amountPaid < total && !supplierId) {
+
+        notify("Sélectionne un fournisseur pour enregistrer une dette.");
+
+        return;
+
+    }
+
+    try {
+
+        await createPurchase({
+
+            items: [{
+
+                productId,
+
+                quantity,
+
+                purchasePrice
+
+            }],
+
+            supplierId,
+
+            amountPaid
+
+        });
+
+        notify("Approvisionnement enregistré.");
+
+        event.target.reset();
+
+        await loadAllData();
+
+    } catch (error) {
+
+        notify(error.message);
+
+    }
+
+}
+
+
+// ======================================================
+// 21. ENREGISTREMENT DÉPENSE
+// ======================================================
+
+async function handleExpenseForm(event) {
+
+    event.preventDefault();
+
+    try {
+
+        await addExpense({
+
+            title: $("expense-title").value.trim(),
+
+            category: $("expense-category").value.trim(),
+
+            amount: number($("expense-amount").value),
+
+            description: $("expense-description").value.trim()
+
+        });
+
+        notify("Dépense enregistrée.");
+
+        event.target.reset();
+
+        await loadAllData();
+
+    } catch (error) {
+
+        notify(error.message);
+
+    }
+
+}
+
+
+// ======================================================
+// 22. ENREGISTREMENT PERTE
+// ======================================================
+
+async function handleLossForm(event) {
+
+    event.preventDefault();
+
+    try {
+
+        await recordLoss({
+
+            productId: $("loss-product").value,
+
+            quantity: number($("loss-quantity").value),
+
+            reason: $("loss-reason").value.trim()
+
+        });
+
+        notify("Perte enregistrée.");
+
+        event.target.reset();
+
+        await loadAllData();
+
+    } catch (error) {
+
+        notify(error.message);
+
+    }
+
+}
+
+
+// ======================================================
+// 23. RAPPORTS
+// ======================================================
+
+async function renderReports() {
+
+    const container = $("reports-content");
+
+    if (!container) return;
+
+    try {
+
+        const summary = await getFinancialSummary();
+
+        container.innerHTML = `
+
+            <h3>Situation financière</h3>
+
+            <p>Chiffre d'affaires : ${money(summary.totalSales)}</p>
+
+            <p>Bénéfice estimé : ${money(summary.totalProfit)}</p>
+
+            <p>Dépenses : ${money(summary.totalExpenses)}</p>
+
+            <p>Pertes : ${money(summary.totalLosses)}</p>
+
+            <p>Résultat net estimé :
+                <strong>${money(summary.estimatedNetResult)}</strong>
+            </p>
+
+            <hr>
+
+            <p>Dettes clients : ${money(summary.totalCustomerDebt)}</p>
+
+            <p>Dettes fournisseurs : ${money(summary.totalSupplierDebt)}</p>
+
+            <p>Valeur du stock : ${money(summary.stockValue)}</p>
+
+            <p>Total bouteilles : ${summary.totalStockBottles}</p>
+
+        `;
+
+    } catch (error) {
+
+        console.error(error);
+
+        container.textContent = "Impossible de charger les rapports.";
+
+    }
+
+}
+
+
+// ======================================================
+// 24. GESTION DES UTILISATEURS
+// ======================================================
+
+function renderUsers() {
+
+    const container = $("users-list");
+
+    if (!container) return;
+
+    if (!currentIsAdmin) {
+
+        container.textContent =
+            "Cette fonction est réservée à l'administrateur.";
+
+        return;
+
+    }
+
+    container.innerHTML = `
+
+        <h4>Administration des accès</h4>
+
+        <p>Administrateur principal :</p>
+
+        <strong>${ADMIN_EMAIL}</strong>
+
+        <p>
+            Les demandes d'accès et les autorisations seront
+            gérées depuis cette section.
+        </p>
+
+        <button id="refresh-users">
+            Actualiser les demandes
+        </button>
+
+        <div id="user-requests-list">
+            Chargement...
+        </div>
+
+    `;
+
+}
+
+
+// ======================================================
+// 25. CHARGEMENT DES DEMANDES D'ACCÈS
+// ======================================================
+
+async function loadUserRequests() {
+
+    if (!currentIsAdmin) return;
+
+    const container = $("user-requests-list");
+
+    if (!container) return;
+
+    try {
+
+        const snapshot = await getDocs(
+            collection(db, "userRequests")
+        );
 
         const requests = snapshot.docs.map(item => ({
+
             id: item.id,
+
             ...item.data()
+
         }));
 
         const pending = requests.filter(item =>
@@ -1480,231 +1673,559 @@ async function renderUserRequests() {
         );
 
         if (!pending.length) {
-            container.innerHTML = "<p>Aucune demande en attente.</p>";
+
+            container.textContent = "Aucune demande en attente.";
+
             return;
+
         }
 
-        container.innerHTML = pending.map(item => `
-            <div class="user-request-card">
-                <h4>${escapeHTML(item.name || "Utilisateur")}</h4>
-                <p>${escapeHTML(item.email || "")}</p>
+        container.innerHTML = pending.map(request => `
 
-                <button type="button"
-                    data-approve-user="${escapeHTML(item.uid)}">
+            <div class="content-card">
+
+                <p>Nom : ${escapeHTML(request.name || "-")}</p>
+
+                <p>Email : ${escapeHTML(request.email || "-")}</p>
+
+                <button data-approve-user="${request.id}">
                     Autoriser
                 </button>
 
-                <button type="button"
-                    data-deny-user="${escapeHTML(item.uid)}">
+                <button data-deny-user="${request.id}">
                     Refuser
                 </button>
+
             </div>
+
         `).join("");
 
     } catch (error) {
+
         console.error(error);
-        container.innerHTML = "<p>Impossible de charger les demandes.</p>";
+
+        container.textContent =
+            "Impossible de récupérer les demandes. Vérifie les règles Firestore.";
+
     }
+
 }
 
-/* ACTIONS ADMINISTRATEUR */
 
-if ($("users-list")) {
-    $("users-list").addEventListener("click", async event => {
-        if (currentRole !== "admin") return;
+// ======================================================
+// 26. APPROBATION D'UN UTILISATEUR
+// ======================================================
 
-        const approve = event.target.closest("[data-approve-user]");
-        const deny = event.target.closest("[data-deny-user]");
+async function approveUser(uid) {
 
-        if (approve) {
-            const uid = approve.dataset.approveUser;
+    if (!currentIsAdmin) return;
 
-            try {
-                const requestRef = doc(db, "userRequests", uid);
-                const snapshot = await getDoc(requestRef);
+    try {
 
-                if (!snapshot.exists()) {
-                    alert("Cette demande n'existe plus.");
-                    await renderUserRequests();
-                    return;
-                }
+        await setDoc(
+            doc(db, "authorizedUsers", uid),
+            {
 
-                const data = snapshot.data();
+                approved: true,
 
-                await setDoc(doc(db, "authorizedUsers", uid), {
-                    uid,
-                    name: data.name || "",
-                    email: data.email || "",
-                    role: "operator",
-                    status: "approved",
-                    approvedBy: currentUser.uid,
-                    approvedAt: serverTimestamp()
-                });
+                role: "user",
 
-                await deleteDoc(requestRef);
+                approvedBy: currentUser.email,
 
-                alert("Utilisateur autorisé.");
-                await renderUserRequests();
+                approvedAt: serverTimestamp()
 
-            } catch (error) {
-                console.error(error);
-                alert("Impossible d'autoriser cet utilisateur.");
+            },
+            { merge: true }
+        );
+
+        await updateDoc(
+            doc(db, "userRequests", uid),
+            {
+
+                status: "approved",
+
+                approvedAt: serverTimestamp()
+
             }
+        );
+
+        notify("Utilisateur autorisé.");
+
+        await loadUserRequests();
+
+    } catch (error) {
+
+        console.error(error);
+
+        notify(
+            "Autorisation impossible. Vérifie les règles Firestore."
+        );
+
+    }
+
+}
+
+
+// ======================================================
+// 27. REFUS D'UN UTILISATEUR
+// ======================================================
+
+async function denyUser(uid) {
+
+    if (!currentIsAdmin) return;
+
+    if (!confirm("Refuser cette demande d'accès ?")) return;
+
+    try {
+
+        await updateDoc(
+            doc(db, "userRequests", uid),
+            {
+
+                status: "rejected",
+
+                rejectedAt: serverTimestamp()
+
+            }
+        );
+
+        notify("Demande refusée.");
+
+        await loadUserRequests();
+
+    } catch (error) {
+
+        notify(error.message);
+
+    }
+
+}
+
+
+// ======================================================
+// 28. SYNCHRONISATION HORS CONNEXION
+// ======================================================
+
+async function processOfflineOperation(operation) {
+
+    switch (operation.type) {
+
+        case "createSale":
+
+            return await createSale({
+
+                ...operation.payload,
+
+                operationId: operation.operationId
+
+            });
+
+
+        case "createPurchase":
+
+            return await createPurchase({
+
+                ...operation.payload,
+
+                operationId: operation.operationId
+
+            });
+
+
+        default:
+
+            throw new Error(
+                "Type d'opération hors connexion non reconnu : " +
+                operation.type
+            );
+
+    }
+
+}
+
+
+async function synchronizeOfflineData() {
+
+    if (!isOnline()) {
+
+        showSyncStatus("Hors connexion — opérations conservées");
+
+        return;
+
+    }
+
+    try {
+
+        showSyncStatus("Synchronisation en cours...");
+
+        const result = await syncPendingOperations(
+            processOfflineOperation
+        );
+
+        await updateSyncStatus();
+
+        if (result.completed > 0) {
+
+            await loadAllData();
+
         }
 
-        if (deny) {
-            const uid = deny.dataset.denyUser;
+    } catch (error) {
 
-            if (!confirm("Voulez-vous refuser cette demande ?")) return;
+        console.error(error);
 
-            try {
-                await setDoc(
-                    doc(db, "userRequests", uid),
-                    {
-                        status: "denied",
-                        deniedAt: serverTimestamp()
-                    },
-                    { merge: true }
-                );
+        showSyncStatus("Erreur de synchronisation");
 
-                alert("Demande refusée.");
-                await renderUserRequests();
+    }
 
-            } catch (error) {
-                console.error(error);
-                alert("Impossible de refuser cet utilisateur.");
-            }
-        }
-    });
 }
 
-/* INFORMATIONS UTILISATEUR */
 
-function displayUserInformation(user) {
-    const element = $("current-user");
-    if (!element) return;
+async function updateSyncStatus() {
 
-    const name = user.displayName || user.email || "Utilisateur";
+    const pending = await countPendingOperations();
 
-    const role = currentRole === "admin"
-        ? "Administrateur"
-        : "Opérateur";
+    const failed = await countFailedOperations();
 
-    element.textContent = `${name} — ${role}`;
-}
+    if (!isOnline()) {
 
-/* INTERFACE SELON LE RÔLE */
+        showSyncStatus(
+            `Hors connexion — ${pending} opération(s) en attente`
+        );
 
-function configureRoleInterface() {
-    const button = document.querySelector(
-        '[data-section="users-section"]'
+        return;
+
+    }
+
+    showSyncStatus(
+
+        `${pending} opération(s) en attente — ` +
+        `${failed} échec(s)`
+
     );
 
-    if (button) {
-        button.hidden = currentRole !== "admin";
-    }
-
-    if ($("users-section") && currentRole !== "admin") {
-        $("users-section").hidden = true;
-    }
 }
 
-/* CONNEXION INTERNET */
 
-function updateConnectionStatus(online) {
-    const element = $("sync-status");
-    if (!element) return;
+// ======================================================
+// 29. SAUVEGARDE DES DONNÉES
+// ======================================================
 
-    element.textContent = online ? "En ligne" : "Hors connexion";
+async function exportBackup() {
+
+    try {
+
+        const data = {
+
+            exportDate: new Date().toISOString(),
+
+            products,
+
+            customers,
+
+            sales,
+
+            suppliers,
+
+            purchases,
+
+            expenses,
+
+            losses
+
+        };
+
+        const blob = new Blob(
+
+            [JSON.stringify(data, null, 2)],
+
+            { type: "application/json" }
+
+        );
+
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+
+        link.href = url;
+
+        link.download =
+            "sarah-stock-sauvegarde-" +
+            new Date().toISOString().slice(0, 10) +
+            ".json";
+
+        link.click();
+
+        URL.revokeObjectURL(url);
+
+        notify("Sauvegarde téléchargée.");
+
+    } catch (error) {
+
+        notify("Erreur lors de la sauvegarde.");
+
+    }
+
 }
 
-/* INITIALISATION */
 
-async function initializeApplication(user) {
+function initializeBackup() {
+
+    const container = $("backup-content");
+
+    if (!container) return;
+
+    container.innerHTML = `
+
+        <p>Exporter une copie des données du dépôt.</p>
+
+        <button id="export-backup">
+            Télécharger la sauvegarde
+        </button>
+
+    `;
+
+}
+
+
+// ======================================================
+// 30. ÉCOUTE DES ACTIONS
+// ======================================================
+
+function initializeForms() {
+
+    $("product-form")?.addEventListener(
+        "submit",
+        handleProductForm
+    );
+
+    $("customer-form")?.addEventListener(
+        "submit",
+        handleCustomerForm
+    );
+
+    $("sale-form")?.addEventListener(
+        "submit",
+        handleSaleForm
+    );
+
+    $("supplier-form")?.addEventListener(
+        "submit",
+        handleSupplierForm
+    );
+
+    $("purchase-form")?.addEventListener(
+        "submit",
+        handlePurchaseForm
+    );
+
+    $("expense-form")?.addEventListener(
+        "submit",
+        handleExpenseForm
+    );
+
+    $("loss-form")?.addEventListener(
+        "submit",
+        handleLossForm
+    );
+
+
+    $("logout-button")?.addEventListener("click", async () => {
+
+        const { signOut } = await import(
+            "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js"
+        );
+
+        await signOut(auth);
+
+    });
+
+
+    document.addEventListener("click", async event => {
+
+        const stockButton = event.target.closest("[data-stock]");
+
+        if (stockButton) {
+
+            await adjustStock(stockButton.dataset.stock);
+
+            return;
+
+        }
+
+
+        const deleteButton = event.target.closest(
+            "[data-delete-product]"
+        );
+
+        if (deleteButton) {
+
+            await removeProduct(
+                deleteButton.dataset.deleteProduct
+            );
+
+            return;
+
+        }
+
+
+        const paymentButton = event.target.closest(
+            "[data-pay-customer]"
+        );
+
+        if (paymentButton) {
+
+            await payCustomer(
+                paymentButton.dataset.payCustomer
+            );
+
+            return;
+
+        }
+
+
+        const approveButton = event.target.closest(
+            "[data-approve-user]"
+        );
+
+        if (approveButton) {
+
+            await approveUser(
+                approveButton.dataset.approveUser
+            );
+
+            return;
+
+        }
+
+
+        const denyButton = event.target.closest(
+            "[data-deny-user]"
+        );
+
+        if (denyButton) {
+
+            await denyUser(
+                denyButton.dataset.denyUser
+            );
+
+            return;
+
+        }
+
+
+        if (event.target.id === "refresh-users") {
+
+            await loadUserRequests();
+
+            return;
+
+        }
+
+
+        if (event.target.id === "export-backup") {
+
+            await exportBackup();
+
+        }
+
+    });
+
+}
+
+
+// ======================================================
+// 31. INITIALISATION APRÈS CONNEXION
+// ======================================================
+
+async function initializeApplication(user, isAdmin) {
+
+    if (currentUser?.uid === user.uid) return;
+
     currentUser = user;
 
-    try {
-        const authorized = await checkUserAccess(user);
+    currentIsAdmin = Boolean(isAdmin);
 
-        if (!authorized) {
-            showPendingAccess();
-            return;
+    $("current-user").textContent =
+        user.displayName || user.email;
+
+    initializeNavigation();
+
+    createManagementForms();
+
+    initializeBackup();
+
+    initializeForms();
+
+    await openOfflineDB();
+
+    await loadAllData();
+
+    await updateSyncStatus();
+
+    if (currentIsAdmin) {
+
+        await loadUserRequests();
+
+    }
+
+    await synchronizeOfflineData();
+
+    listenToConnection(async online => {
+
+        if (online) {
+
+            showSyncStatus("Connexion rétablie — synchronisation...");
+
+            await synchronizeOfflineData();
+
+        } else {
+
+            showSyncStatus("Hors connexion — données locales conservées");
+
         }
 
-        showApplication();
-
-        displayUserInformation(user);
-        configureRoleInterface();
-
-        await loadData();
-
-        if (currentRole === "admin") {
-            await renderUserRequests();
-        }
-
-    } catch (error) {
-        console.error(error);
-
-        showLogin();
-
-        alert(
-            "Impossible de vérifier les autorisations. Vérifiez les règles Firestore."
-        );
-    }
-}
-
-/* SURVEILLANCE DE L'AUTHENTIFICATION */
-
-onAuthStateChanged(auth, async user => {
-    if (user) {
-        await initializeApplication(user);
-    } else {
-        currentUser = null;
-        currentRole = null;
-
-        showLogin();
-
-        if ($("current-user")) {
-            $("current-user").textContent = "";
-        }
-    }
-});
-
-/* INITIALISATION HORS LIGNE */
-
-async function initializeOfflineFeatures() {
-    try {
-        await openOfflineDB();
-
-        const pending = await countPendingOperations();
-
-        console.log(
-            "Opérations en attente :",
-            pending
-        );
-
-        listenToConnection(updateConnectionStatus);
-
-        updateConnectionStatus(isOnline());
-
-    } catch (error) {
-        console.error("Erreur hors ligne :", error);
-    }
-}
-
-initializeOfflineFeatures();
-
-/* SERVICE WORKER */
-
-if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-        navigator.serviceWorker
-            .register("./service-worker.js")
-            .then(() => {
-                console.log("Service Worker enregistré.");
-            })
-            .catch(error => {
-                console.error("Erreur Service Worker :", error);
-            });
     });
+
+    console.log(
+        "DÉPÔT SARAH V2 initialisé.",
+        user.email
+    );
+
 }
+
+
+// ======================================================
+// 32. RÉCEPTION DE L'ÉVÉNEMENT D'AUTHENTIFICATION
+// ======================================================
+
+window.addEventListener(
+    "sarah-auth-ready",
+    async event => {
+
+        const { user, isAdmin } = event.detail;
+
+        try {
+
+            await initializeApplication(user, isAdmin);
+
+        } catch (error) {
+
+            console.error(
+                "Erreur d'initialisation de l'application :",
+                error
+            );
+
+            notify(
+                "Erreur lors du démarrage de l'application."
+            );
+
+        }
+
+    }
+);
+
+
+// ======================================================
+// 33. FIN APP.JS
+// ======================================================
