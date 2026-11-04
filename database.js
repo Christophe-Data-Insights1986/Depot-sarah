@@ -2,6 +2,7 @@
 // DÉPÔT SARAH V2
 // DATABASE.JS
 // MOTEUR CENTRAL DE GESTION DES DONNÉES
+// FIREBASE 10.14.1
 // ======================================================
 
 import { db } from "./firebase.js";
@@ -12,17 +13,11 @@ import {
     getDoc,
     getDocs,
     addDoc,
-    setDoc,
     updateDoc,
     deleteDoc,
-    query,
-    where,
-    orderBy,
-    limit,
     serverTimestamp,
-    runTransaction,
-    writeBatch
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+    runTransaction
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 
 // ======================================================
@@ -30,7 +25,6 @@ import {
 // ======================================================
 
 export const COLLECTIONS = {
-
     products: "products",
     sales: "sales",
     customers: "customers",
@@ -40,7 +34,6 @@ export const COLLECTIONS = {
     expenses: "expenses",
     losses: "losses",
     stockMovements: "stockMovements"
-
 };
 
 
@@ -49,7 +42,6 @@ export const COLLECTIONS = {
 // ======================================================
 
 function getCollection(name) {
-
     const collectionName = COLLECTIONS[name] || name;
 
     if (!collectionName) {
@@ -57,95 +49,104 @@ function getCollection(name) {
     }
 
     return collection(db, collectionName);
-
 }
 
 
 function getDocument(name, id) {
-
     return doc(db, COLLECTIONS[name] || name, id);
-
 }
 
 
 function generateId() {
-
     return crypto.randomUUID();
-
 }
 
 
 function toNumber(value, fallback = 0) {
-
     const number = Number(value);
 
     return Number.isFinite(number) ? number : fallback;
-
-}
-
-
-function normalizeRecord(id, data) {
-
-    const record = {
-        id,
-        ...data
-    };
-
-    const quantity = toNumber(
-        data.quantity ?? data.qty ?? 0
-    );
-
-    const units = toNumber(
-        data.unitsPerCrate ?? data.units ?? 12
-    );
-
-    const totalBottles = toNumber(
-        data.totalBottles ?? quantity * units
-    );
-
-    const profit = toNumber(
-        data.profit ?? data.estimatedProfit ?? 0
-    );
-
-    return {
-
-        ...record,
-
-        quantity,
-        qty: quantity,
-
-        unitsPerCrate: units,
-        units,
-
-        totalBottles,
-
-        profit,
-        estimatedProfit: profit
-
-    };
-
 }
 
 
 function cleanData(data) {
-
     const result = { ...data };
 
     delete result.id;
-
     delete result.createdAt;
-
     delete result.updatedAt;
 
     return result;
-
 }
 
 
 function nowDate() {
-
     return new Date().toISOString();
+}
 
+
+function getStock(product) {
+    if (product.totalBottles !== undefined) {
+        return toNumber(product.totalBottles);
+    }
+
+    if (product.qty !== undefined) {
+        return toNumber(product.qty);
+    }
+
+    return toNumber(product.quantity);
+}
+
+
+function normalizeRecord(id, data) {
+    const stock = getStock(data);
+
+    const units = toNumber(
+        data.unitsPerCrate ?? data.units,
+        12
+    );
+
+    const profit = toNumber(
+        data.profit ?? data.estimatedProfit
+    );
+
+    return {
+        id,
+        ...data,
+
+        // Stock toujours exprimé en bouteilles
+        quantity: stock,
+        qty: stock,
+        totalBottles: stock,
+
+        unitsPerCrate: units,
+        units,
+
+        profit,
+        estimatedProfit: profit
+    };
+}
+
+
+function validatePositive(value, message) {
+    const number = toNumber(value);
+
+    if (number <= 0) {
+        throw new Error(message);
+    }
+
+    return number;
+}
+
+
+function createMovement(transaction, data) {
+    const reference = doc(getCollection("stockMovements"));
+
+    transaction.set(reference, {
+        ...data,
+        date: nowDate(),
+        createdAt: serverTimestamp()
+    });
 }
 
 
@@ -154,41 +155,18 @@ function nowDate() {
 // ======================================================
 
 export async function getAll(name) {
+    const snapshot = await getDocs(getCollection(name));
 
-    if (name) {
-
-        const snapshot = await getDocs(
-            getCollection(name)
-        );
-
-        return snapshot.docs.map(item =>
-            normalizeRecord(item.id, item.data())
-        );
-
-    }
-
-    const result = {};
-
-    for (const key of Object.keys(COLLECTIONS)) {
-
-        result[key] = await getAll(key);
-
-    }
-
-    return result;
-
+    return snapshot.docs.map(item =>
+        normalizeRecord(item.id, item.data())
+    );
 }
 
 
-// ======================================================
-// 4. LECTURE PAR IDENTIFIANT
-// ======================================================
-
 export async function getById(name, id) {
-
-    const reference = getDocument(name, id);
-
-    const snapshot = await getDoc(reference);
+    const snapshot = await getDoc(
+        getDocument(name, id)
+    );
 
     if (!snapshot.exists()) {
         return null;
@@ -198,23 +176,18 @@ export async function getById(name, id) {
         snapshot.id,
         snapshot.data()
     );
-
 }
 
 
 // ======================================================
-// 5. CRÉATION GÉNÉRALE
+// 4. CRÉATION GÉNÉRALE
 // ======================================================
 
 export async function createRecord(name, data) {
-
     const payload = {
-
         ...cleanData(data),
-
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
-
     };
 
     const reference = await addDoc(
@@ -223,89 +196,79 @@ export async function createRecord(name, data) {
     );
 
     return {
-
         id: reference.id,
-        ...payload
-
+        ...cleanData(data)
     };
-
 }
 
 
 // ======================================================
-// 6. MODIFICATION GÉNÉRALE
+// 5. MODIFICATION GÉNÉRALE
 // ======================================================
 
 export async function updateRecord(name, id, data) {
-
-    const reference = getDocument(name, id);
-
-    await updateDoc(reference, {
-
-        ...cleanData(data),
-
-        updatedAt: serverTimestamp()
-
-    });
+    await updateDoc(
+        getDocument(name, id),
+        {
+            ...cleanData(data),
+            updatedAt: serverTimestamp()
+        }
+    );
 
     return await getById(name, id);
-
 }
 
 
 // ======================================================
-// 7. SUPPRESSION GÉNÉRALE
+// 6. SUPPRESSION GÉNÉRALE
 // ======================================================
 
 export async function removeRecord(name, id) {
-
-    await deleteDoc(
-        getDocument(name, id)
-    );
+    await deleteDoc(getDocument(name, id));
 
     return true;
-
 }
 
 
 // ======================================================
-// 8. PRODUITS
+// 7. PRODUITS
 // ======================================================
 
 export async function addProduct(data) {
-
-    const units = toNumber(
-        data.unitsPerCrate ?? data.units ?? 12
+    const units = validatePositive(
+        data.unitsPerCrate ?? data.units ?? 12,
+        "Le nombre de bouteilles par casier doit être positif."
     );
 
-    const quantity = toNumber(
-        data.quantity ?? data.qty ?? 0
+    const stock = toNumber(
+        data.totalBottles ?? data.qty ?? data.quantity
     );
+
+    if (stock < 0) {
+        throw new Error("Le stock initial est invalide.");
+    }
 
     const product = {
-
-        ...cleanData(data),
-
         name: data.name || "Produit sans nom",
-
         brand: data.brand || "",
-
         format: data.format || "",
 
         unitsPerCrate: units,
         units,
 
-        quantity,
-        qty: quantity,
-
-        totalBottles: quantity * units,
+        // Toutes les quantités sont en bouteilles.
+        quantity: stock,
+        qty: stock,
+        totalBottles: stock,
 
         purchasePrice: toNumber(
-            data.purchasePrice ?? data.costPrice
+            data.purchasePrice ??
+            data.costPrice
         ),
 
         sellingPrice: toNumber(
-            data.sellingPrice ?? data.bottlePrice
+            data.sellingPrice ??
+            data.bottlePrice
         ),
 
         cratePrice: toNumber(data.cratePrice),
@@ -313,57 +276,61 @@ export async function addProduct(data) {
         lowStockThreshold: toNumber(
             data.lowStockThreshold ?? 12
         )
-
     };
 
-    return await createRecord(
-        "products",
-        product
-    );
-
+    return await createRecord("products", product);
 }
 
 
 export async function getProducts() {
-
     return await getAll("products");
-
 }
 
 
 export async function updateProduct(id, data) {
+    const updates = { ...data };
 
-    return await updateRecord(
-        "products",
-        id,
-        data
-    );
+    if (
+        updates.totalBottles !== undefined ||
+        updates.qty !== undefined ||
+        updates.quantity !== undefined
+    ) {
+        const stock = toNumber(
+            updates.totalBottles ??
+            updates.qty ??
+            updates.quantity
+        );
 
+        if (stock < 0) {
+            throw new Error("Stock invalide.");
+        }
+
+        updates.totalBottles = stock;
+        updates.quantity = stock;
+        updates.qty = stock;
+    }
+
+    return await updateRecord("products", id, updates);
 }
 
 
 export async function deleteProduct(id) {
-
-    return await removeRecord(
-        "products",
-        id
-    );
-
+    return await removeRecord("products", id);
 }
 
 
 // ======================================================
-// 9. AJUSTEMENT DU STOCK
+// 8. AJUSTEMENT DU STOCK
 // ======================================================
 
 export async function updateStock(
     productId,
     bottleChange,
-    reason = "Ajustement"
+    reason = "Ajustement manuel"
 ) {
+    const change = toNumber(bottleChange);
 
     return await runTransaction(db, async transaction => {
-
         const productRef = getDocument(
             "products",
             productId
@@ -377,196 +344,169 @@ export async function updateStock(
 
         const product = snapshot.data();
 
-        const units = toNumber(
-            product.unitsPerCrate ?? product.units ?? 12
-        );
+        const oldStock = getStock(product);
+        const newStock = oldStock + change;
 
-        const oldQuantity = toNumber(
-            product.totalBottles ??
-            toNumber(product.quantity ?? product.qty) * units
-        );
-
-        const newQuantity =
-            oldQuantity + toNumber(bottleChange);
-
-        if (newQuantity < 0) {
+        if (newStock < 0) {
             throw new Error("Stock insuffisant.");
         }
 
         transaction.update(productRef, {
-
-            totalBottles: newQuantity,
-
-            quantity: Math.floor(newQuantity / units),
-
-            qty: Math.floor(newQuantity / units),
-
+            totalBottles: newStock,
+            quantity: newStock,
+            qty: newStock,
             updatedAt: serverTimestamp()
-
         });
 
-        const movementRef = doc(
-            getCollection("stockMovements")
-        );
-
-        transaction.set(movementRef, {
-
+        createMovement(transaction, {
             productId,
-
             productName: product.name,
-
-            quantity: toNumber(bottleChange),
-
-            reason,
-
-            date: nowDate(),
-
-            createdAt: serverTimestamp()
-
+            quantity: change,
+            previousStock: oldStock,
+            newStock,
+            reason
         });
 
-        return newQuantity;
-
+        return newStock;
     });
-
 }
 
 
 // ======================================================
-// 10. CLIENTS
+// 9. CLIENTS
 // ======================================================
 
 export async function addCustomer(data) {
-
-    return await createRecord(
-        "customers",
-        {
-
-            ...cleanData(data),
-
-            name: data.name || "",
-
-            phone: data.phone || "",
-
-            address: data.address || "",
-
-            debt: toNumber(data.debt),
-
-            totalPurchases: toNumber(
-                data.totalPurchases
-            )
-
-        }
-    );
-
+    return await createRecord("customers", {
+        name: data.name || "",
+        phone: data.phone || "",
+        address: data.address || "",
+        debt: toNumber(data.debt),
+        totalPurchases: toNumber(data.totalPurchases)
+    });
 }
 
 
 export async function getCustomers() {
-
     return await getAll("customers");
-
 }
 
 
 export async function updateCustomer(id, data) {
-
-    return await updateRecord(
-        "customers",
-        id,
-        data
-    );
-
+    return await updateRecord("customers", id, data);
 }
 
 
 // ======================================================
-// 11. FOURNISSEURS
+// 10. FOURNISSEURS
 // ======================================================
 
 export async function addSupplier(data) {
-
-    return await createRecord(
-        "suppliers",
-        {
-
-            ...cleanData(data),
-
-            name: data.name || "",
-
-            phone: data.phone || "",
-
-            address: data.address || ""
-
-        }
-    );
-
+    return await createRecord("suppliers", {
+        name: data.name || "",
+        phone: data.phone || "",
+        address: data.address || "",
+        debt: toNumber(data.debt)
+    });
 }
 
 
 export async function getSuppliers() {
-
     return await getAll("suppliers");
-
 }
 
 
 // ======================================================
-// 12. VENTES
+// 11. VENTES
 // ======================================================
 
 export async function createSale(data) {
-
-    const items = data.items || [
-
-        {
-            productId: data.productId,
-
-            crates: data.crates ?? data.casiers ?? 0,
-
-            extraBottles:
-                data.extraBottles ??
-                data.bottles ??
-                0,
-
-            cratePrice: data.cratePrice ?? data.prixCasier,
-
-            bottlePrice:
-                data.bottlePrice ??
-                data.prixBouteille
-
-        }
-
-    ];
+    const items = data.items || [{
+        productId: data.productId,
+        crates: data.crates ?? data.casiers ?? 0,
+        extraBottles: data.extraBottles ?? data.bottles ?? 0,
+        cratePrice: data.cratePrice ?? data.prixCasier,
+        bottlePrice: data.bottlePrice ?? data.prixBouteille
+    }];
 
     if (!items.length) {
         throw new Error("Aucun produit dans la vente.");
     }
 
-    const customerId = data.customerId || null;
-
-    const payment = toNumber(
-        data.amountPaid ?? data.paidAmount ?? data.total
-    );
+    // Identifiant stable pour éviter les ventes en double.
+    const saleId = data.operationId || generateId();
+    const saleRef = getDocument("sales", saleId);
 
     return await runTransaction(db, async transaction => {
 
-        const preparedItems = [];
+        const existingSale = await transaction.get(saleRef);
 
-        let total = 0;
+        if (existingSale.exists()) {
+            return {
+                id: saleId,
+                ...existingSale.data(),
+                alreadyProcessed: true
+            };
+        }
 
-        let totalCost = 0;
+        const grouped = new Map();
 
         for (const item of items) {
+            if (!item.productId) {
+                throw new Error("Produit non identifié.");
+            }
 
+            const crates = toNumber(item.crates);
+            const extra = toNumber(item.extraBottles);
+
+            if (crates < 0 || extra < 0) {
+                throw new Error("Quantité invalide.");
+            }
+
+            if (crates === 0 && extra === 0) {
+                continue;
+            }
+
+            const key = item.productId;
+
+            if (!grouped.has(key)) {
+                grouped.set(key, {
+                    productId: key,
+                    crates: 0,
+                    extraBottles: 0,
+                    cratePrice: toNumber(item.cratePrice),
+                    bottlePrice: toNumber(item.bottlePrice)
+                });
+            }
+
+            const group = grouped.get(key);
+
+            group.crates += crates;
+            group.extraBottles += extra;
+
+            if (item.cratePrice !== undefined) {
+                group.cratePrice = toNumber(item.cratePrice);
+            }
+
+            if (item.bottlePrice !== undefined) {
+                group.bottlePrice = toNumber(item.bottlePrice);
+            }
+        }
+
+        const prepared = [];
+        const productSnapshots = [];
+
+        let total = 0;
+        let totalCost = 0;
+
+        // Toutes les lectures de produits.
+        for (const item of grouped.values()) {
             const productRef = getDocument(
                 "products",
                 item.productId
             );
 
-            const snapshot = await transaction.get(
-                productRef
-            );
+            const snapshot = await transaction.get(productRef);
 
             if (!snapshot.exists()) {
                 throw new Error("Produit introuvable.");
@@ -575,28 +515,15 @@ export async function createSale(data) {
             const product = snapshot.data();
 
             const units = toNumber(
-                product.unitsPerCrate ??
-                product.units ??
+                product.unitsPerCrate ?? product.units,
                 12
             );
 
-            const crates = toNumber(item.crates);
-
-            const extraBottles = toNumber(
-                item.extraBottles
-            );
-
             const quantity =
-                crates * units + extraBottles;
+                item.crates * units +
+                item.extraBottles;
 
-            if (quantity <= 0) {
-                throw new Error("Quantité de vente invalide.");
-            }
-
-            const stock = toNumber(
-                product.totalBottles ??
-                toNumber(product.quantity ?? product.qty) * units
-            );
+            const stock = getStock(product);
 
             if (stock < quantity) {
                 throw new Error(
@@ -604,77 +531,97 @@ export async function createSale(data) {
                 );
             }
 
-            const cratePrice = toNumber(
-                item.cratePrice ?? product.cratePrice
-            );
+            const cratePrice =
+                item.cratePrice ||
+                toNumber(product.cratePrice);
 
-            const bottlePrice = toNumber(
-                item.bottlePrice ?? product.sellingPrice
-            );
+            const bottlePrice =
+                item.bottlePrice ||
+                toNumber(product.sellingPrice);
 
             const costPrice = toNumber(
-                product.purchasePrice ?? product.costPrice
+                product.purchasePrice ??
+                product.costPrice
             );
 
             const lineTotal =
-                crates * cratePrice +
-                extraBottles * bottlePrice;
+                item.crates * cratePrice +
+                item.extraBottles * bottlePrice;
 
-            const lineCost =
-                quantity * costPrice;
+            const lineCost = quantity * costPrice;
 
             const newStock = stock - quantity;
 
             total += lineTotal;
-
             totalCost += lineCost;
 
-            preparedItems.push({
-
+            prepared.push({
                 productId: item.productId,
-
                 productName: product.name,
-
-                crates,
-
-                extraBottles,
-
+                crates: item.crates,
+                extraBottles: item.extraBottles,
+                unitsPerCrate: units,
                 quantity,
-
                 cratePrice,
-
                 bottlePrice,
-
                 total: lineTotal,
-
                 cost: lineCost,
-
-                stockAfter: newStock,
-
-                productRef
-
+                stockBefore: stock,
+                stockAfter: newStock
             });
 
+            productSnapshots.push({
+                productRef,
+                product,
+                newStock,
+                quantity
+            });
         }
 
-        if (payment < 0 || payment > total) {
+        if (!prepared.length || total <= 0) {
+            throw new Error("Montant de vente invalide.");
+        }
+
+        const paymentMode = data.paymentMode || data.paymentType || "";
+
+        let amountPaid;
+
+        if (paymentMode === "credit") {
+            amountPaid = 0;
+        } else if (paymentMode === "partial") {
+            amountPaid = toNumber(
+                data.amountPaid ?? data.paidAmount
+            );
+        } else {
+            amountPaid = toNumber(
+                data.amountPaid ?? data.paidAmount ?? total
+            );
+        }
+
+        if (amountPaid < 0 || amountPaid > total) {
             throw new Error("Montant payé invalide.");
         }
 
-        const debt = total - payment;
+        const debt = total - amountPaid;
+
+        const customerId = data.customerId || null;
+
+        if (debt > 0 && !customerId) {
+            throw new Error(
+                "Un client doit être sélectionné pour enregistrer une dette."
+            );
+        }
 
         let customerRef = null;
-
-        let customerSnapshot = null;
+        let customer = null;
 
         if (customerId) {
-
             customerRef = getDocument(
                 "customers",
                 customerId
             );
 
-            customerSnapshot = await transaction.get(
+            const customerSnapshot = await transaction.get(
                 customerRef
             );
 
@@ -682,154 +629,97 @@ export async function createSale(data) {
                 throw new Error("Client introuvable.");
             }
 
+            customer = customerSnapshot.data();
         }
 
-        // Mise à jour des stocks
-
-        for (const item of preparedItems) {
-
-            const units = toNumber(
-                items.find(
-                    x => x.productId === item.productId
-                )?.unitsPerCrate ?? 12
-            );
-
+        // ÉCRITURES : stocks.
+        for (const item of productSnapshots) {
             transaction.update(item.productRef, {
-
-                totalBottles: item.stockAfter,
-
-                quantity: Math.floor(
-                    item.stockAfter / units
-                ),
-
-                qty: Math.floor(
-                    item.stockAfter / units
-                ),
-
+                totalBottles: item.newStock,
+                quantity: item.newStock,
+                qty: item.newStock,
                 updatedAt: serverTimestamp()
-
             });
 
+            createMovement(transaction, {
+                productId: item.productRef.id,
+                productName: item.product.name,
+                quantity: -item.quantity,
+                previousStock: getStock(item.product),
+                newStock: item.newStock,
+                reason: "Vente",
+                saleId
+            });
         }
 
-        // Enregistrement de la vente
+        const profit = total - totalCost;
 
-        const saleRef = doc(
-            getCollection("sales")
-        );
-
-        transaction.set(saleRef, {
-
-            items: preparedItems.map(item => {
-
-                const copy = { ...item };
-
-                delete copy.productRef;
-
-                return copy;
-
-            }),
+        const sale = {
+            items: prepared,
 
             customerId,
 
             customerName:
                 data.customerName ||
-                customerSnapshot?.data()?.name ||
+                customer?.name ||
                 "Client comptant",
 
             total,
-
             totalCost,
+            profit,
+            estimatedProfit: profit,
 
-            profit: total - totalCost,
-
-            estimatedProfit: total - totalCost,
-
-            amountPaid: payment,
-
+            amountPaid,
             debt,
+
+            paymentMethod:
+                data.paymentMethod ||
+                (paymentMode === "credit" ? "Crédit" : "Espèces"),
 
             paymentStatus:
                 debt === 0 ? "paid" : "partial",
 
             date: nowDate(),
-
             createdAt: serverTimestamp()
+        };
 
-        });
+        transaction.set(saleRef, sale);
 
-        // Mise à jour de la dette du client
-
-        if (customerRef && debt > 0) {
-
-            const customer = customerSnapshot.data();
-
+        if (customerRef && customer) {
             transaction.update(customerRef, {
-
-                debt:
-                    toNumber(customer.debt) + debt,
-
+                debt: toNumber(customer.debt) + debt,
                 totalPurchases:
                     toNumber(customer.totalPurchases) + total,
-
                 updatedAt: serverTimestamp()
-
             });
-
-        } else if (customerRef) {
-
-            const customer = customerSnapshot.data();
-
-            transaction.update(customerRef, {
-
-                totalPurchases:
-                    toNumber(customer.totalPurchases) + total,
-
-                updatedAt: serverTimestamp()
-
-            });
-
         }
 
         return {
-
-            id: saleRef.id,
-
+            id: saleId,
             total,
-
             totalCost,
-
-            profit: total - totalCost,
-
-            amountPaid: payment,
-
+            profit,
+            amountPaid,
             debt
-
         };
-
     });
-
 }
 
 
 export async function getSales() {
-
     return await getAll("sales");
-
 }
 
 
 // ======================================================
-// 13. PAIEMENTS DES CLIENTS
+// 12. PAIEMENTS DES CLIENTS
 // ======================================================
 
 export async function recordCustomerPayment(data) {
-
-    const amount = toNumber(data.amount);
-
-    if (amount <= 0) {
-        throw new Error("Montant de paiement invalide.");
-    }
+    const amount = validatePositive(
+        data.amount,
+        "Montant de paiement invalide."
+    );
 
     return await runTransaction(db, async transaction => {
 
@@ -838,16 +728,13 @@ export async function recordCustomerPayment(data) {
             data.customerId
         );
 
-        const customerSnapshot = await transaction.get(
-            customerRef
-        );
+        const snapshot = await transaction.get(customerRef);
 
-        if (!customerSnapshot.exists()) {
+        if (!snapshot.exists()) {
             throw new Error("Client introuvable.");
         }
 
-        const customer = customerSnapshot.data();
-
+        const customer = snapshot.data();
         const currentDebt = toNumber(customer.debt);
 
         if (amount > currentDebt) {
@@ -856,77 +743,100 @@ export async function recordCustomerPayment(data) {
             );
         }
 
+        const paymentRef = doc(getCollection("payments"));
+
         transaction.update(customerRef, {
-
             debt: currentDebt - amount,
-
             updatedAt: serverTimestamp()
-
         });
 
-        const paymentRef = doc(
-            getCollection("payments")
-        );
-
         transaction.set(paymentRef, {
-
             customerId: data.customerId,
-
             customerName: customer.name || "",
-
             amount,
-
             method: data.method || "Espèces",
-
             note: data.note || "",
-
             date: nowDate(),
-
             createdAt: serverTimestamp()
-
         });
 
         return {
-
             id: paymentRef.id,
-
             remainingDebt: currentDebt - amount
-
         };
-
     });
+}
 
+
+export async function getCustomerPayments() {
+    return await getAll("payments");
 }
 
 
 // ======================================================
-// 14. ACHATS ET APPROVISIONNEMENTS
+// 13. ACHATS ET APPROVISIONNEMENTS
 // ======================================================
 
 export async function createPurchase(data) {
-
-    const items = data.items || [];
-
-    if (!items.length) {
+    if (!data.items?.length) {
         throw new Error("Aucun produit dans l'achat.");
     }
 
+    const purchaseId = data.operationId || generateId();
+
+    const purchaseRef = getDocument(
+        "purchases",
+        purchaseId
+    );
+
     return await runTransaction(db, async transaction => {
+
+        const existing = await transaction.get(purchaseRef);
+
+        if (existing.exists()) {
+            return {
+                id: purchaseId,
+                ...existing.data(),
+                alreadyProcessed: true
+            };
+        }
+
+        const grouped = new Map();
+
+        for (const item of data.items) {
+            const id = item.productId;
+
+            if (!id) {
+                throw new Error("Produit non identifié.");
+            }
+
+            const group = grouped.get(id) || {
+                productId: id,
+                quantity: 0,
+                purchasePrice: toNumber(
+                    item.purchasePrice ?? item.costPrice
+                )
+            };
+
+            group.quantity +=
+                toNumber(item.crates ?? item.quantity) *
+                toNumber(item.unitsPerCrate, 12) +
+                toNumber(item.extraBottles);
+
+            grouped.set(id, group);
+        }
 
         const prepared = [];
 
         let total = 0;
 
-        for (const item of items) {
-
+        for (const item of grouped.values()) {
             const productRef = getDocument(
                 "products",
                 item.productId
             );
 
-            const snapshot = await transaction.get(
-                productRef
-            );
+            const snapshot = await transaction.get(productRef);
 
             if (!snapshot.exists()) {
                 throw new Error("Produit introuvable.");
@@ -935,184 +845,173 @@ export async function createPurchase(data) {
             const product = snapshot.data();
 
             const units = toNumber(
-                product.unitsPerCrate ??
-                product.units ??
+                product.unitsPerCrate ?? product.units,
                 12
             );
 
-            const quantity =
-                toNumber(item.crates ?? item.quantity) * units +
-                toNumber(item.extraBottles);
-
-            if (quantity <= 0) {
+            if (item.quantity <= 0) {
                 throw new Error("Quantité d'achat invalide.");
             }
 
-            const cost = toNumber(
-                item.purchasePrice ??
-                item.costPrice ??
-                product.purchasePrice
-            );
+            const cost =
+                item.purchasePrice ||
+                toNumber(product.purchasePrice);
 
-            const oldStock = toNumber(
-                product.totalBottles ??
-                toNumber(product.quantity ?? product.qty) * units
-            );
+            const oldStock = getStock(product);
+            const newStock = oldStock + item.quantity;
+
+            const lineTotal = item.quantity * cost;
+
+            total += lineTotal;
 
             prepared.push({
-
                 productRef,
-
+                product,
                 productId: item.productId,
-
                 productName: product.name,
-
-                quantity,
-
+                quantity: item.quantity,
+                units,
                 oldStock,
-
-                newStock: oldStock + quantity,
-
+                newStock,
                 purchasePrice: cost,
-
-                total: quantity * cost,
-
-                units
-
+                total: lineTotal
             });
+        }
 
-            total += quantity * cost;
+        const amountPaid = toNumber(
+            data.amountPaid ?? total
+        );
 
+        if (amountPaid < 0 || amountPaid > total) {
+            throw new Error("Montant payé invalide.");
+        }
+
+        const supplierId = data.supplierId || null;
+
+        let supplierRef = null;
+        let supplier = null;
+
+        if (supplierId) {
+            supplierRef = getDocument(
+                "suppliers",
+                supplierId
+            );
+
+            const supplierSnapshot = await transaction.get(
+                supplierRef
+            );
+
+            if (!supplierSnapshot.exists()) {
+                throw new Error("Fournisseur introuvable.");
+            }
+
+            supplier = supplierSnapshot.data();
         }
 
         for (const item of prepared) {
-
             transaction.update(item.productRef, {
-
                 totalBottles: item.newStock,
-
-                quantity: Math.floor(
-                    item.newStock / item.units
-                ),
-
-                qty: Math.floor(
-                    item.newStock / item.units
-                ),
-
+                quantity: item.newStock,
+                qty: item.newStock,
                 purchasePrice: item.purchasePrice,
-
                 updatedAt: serverTimestamp()
-
             });
 
+            createMovement(transaction, {
+                productId: item.productId,
+                productName: item.productName,
+                quantity: item.quantity,
+                previousStock: item.oldStock,
+                newStock: item.newStock,
+                reason: "Approvisionnement",
+                purchaseId
+            });
         }
 
-        const purchaseRef = doc(
-            getCollection("purchases")
-        );
+        const debt = total - amountPaid;
+
+        if (supplierRef && supplier) {
+            transaction.update(supplierRef, {
+                debt: toNumber(supplier.debt) + debt,
+                updatedAt: serverTimestamp()
+            });
+        }
 
         transaction.set(purchaseRef, {
-
             items: prepared.map(item => ({
-
                 productId: item.productId,
-
                 productName: item.productName,
-
                 quantity: item.quantity,
-
                 purchasePrice: item.purchasePrice,
-
                 total: item.total
-
             })),
 
-            supplierId: data.supplierId || null,
-
-            supplierName: data.supplierName || "",
+            supplierId,
+            supplierName:
+                data.supplierName ||
+                supplier?.name ||
+                "",
 
             total,
+            amountPaid,
+            debt,
 
-            amountPaid: toNumber(data.amountPaid ?? total),
+            paymentStatus:
+                debt === 0 ? "paid" : "partial",
 
             date: nowDate(),
-
             createdAt: serverTimestamp()
-
         });
 
         return {
-
-            id: purchaseRef.id,
-
-            total
-
+            id: purchaseId,
+            total,
+            amountPaid,
+            debt
         };
-
     });
-
 }
 
 
 export async function getPurchases() {
-
     return await getAll("purchases");
-
 }
 
 
 // ======================================================
-// 15. DÉPENSES
+// 14. DÉPENSES
 // ======================================================
 
 export async function addExpense(data) {
-
-    const amount = toNumber(data.amount);
-
-    if (amount <= 0) {
-        throw new Error("Montant de dépense invalide.");
-    }
-
-    return await createRecord(
-        "expenses",
-        {
-
-            ...cleanData(data),
-
-            title: data.title || data.name || "Dépense",
-
-            category: data.category || "Autre",
-
-            amount,
-
-            description: data.description || "",
-
-            date: nowDate()
-
-        }
+    const amount = validatePositive(
+        data.amount,
+        "Montant de dépense invalide."
     );
 
+    return await createRecord("expenses", {
+        title: data.title || data.name || "Dépense",
+        category: data.category || "Autre",
+        amount,
+        description: data.description || "",
+        date: nowDate()
+    });
 }
 
 
 export async function getExpenses() {
-
     return await getAll("expenses");
-
 }
 
 
 // ======================================================
-// 16. PERTES ET BOUTEILLES CASSÉES
+// 15. PERTES ET BOUTEILLES CASSÉES
 // ======================================================
 
 export async function recordLoss(data) {
-
-    const quantity = toNumber(data.quantity);
-
-    if (quantity <= 0) {
-        throw new Error("Quantité de perte invalide.");
-    }
+    const quantity = validatePositive(
+        data.quantity,
+        "Quantité de perte invalide."
+    );
 
     return await runTransaction(db, async transaction => {
 
@@ -1121,9 +1020,7 @@ export async function recordLoss(data) {
             data.productId
         );
 
-        const snapshot = await transaction.get(
-            productRef
-        );
+        const snapshot = await transaction.get(productRef);
 
         if (!snapshot.exists()) {
             throw new Error("Produit introuvable.");
@@ -1131,16 +1028,7 @@ export async function recordLoss(data) {
 
         const product = snapshot.data();
 
-        const units = toNumber(
-            product.unitsPerCrate ??
-            product.units ??
-            12
-        );
-
-        const oldStock = toNumber(
-            product.totalBottles ??
-            toNumber(product.quantity ?? product.qty) * units
-        );
+        const oldStock = getStock(product);
 
         if (quantity > oldStock) {
             throw new Error("Stock insuffisant.");
@@ -1148,151 +1036,115 @@ export async function recordLoss(data) {
 
         const newStock = oldStock - quantity;
 
-        transaction.update(productRef, {
-
-            totalBottles: newStock,
-
-            quantity: Math.floor(newStock / units),
-
-            qty: Math.floor(newStock / units),
-
-            updatedAt: serverTimestamp()
-
-        });
-
-        const lossRef = doc(
-            getCollection("losses")
-        );
-
         const cost = toNumber(
             product.purchasePrice
         );
 
+        const lossRef = doc(getCollection("losses"));
+
+        transaction.update(productRef, {
+            totalBottles: newStock,
+            quantity: newStock,
+            qty: newStock,
+            updatedAt: serverTimestamp()
+        });
+
         transaction.set(lossRef, {
-
             productId: data.productId,
-
             productName: product.name,
-
             quantity,
-
             reason: data.reason || "Casse",
-
             description: data.description || "",
-
             estimatedValue: quantity * cost,
-
             date: nowDate(),
-
             createdAt: serverTimestamp()
+        });
 
+        createMovement(transaction, {
+            productId: data.productId,
+            productName: product.name,
+            quantity: -quantity,
+            previousStock: oldStock,
+            newStock,
+            reason: data.reason || "Perte"
         });
 
         return {
-
             id: lossRef.id,
-
             remainingStock: newStock,
-
             estimatedValue: quantity * cost
-
         };
-
     });
-
 }
 
 
 export async function getLosses() {
-
     return await getAll("losses");
-
 }
 
 
 // ======================================================
-// 17. HISTORIQUE DES MOUVEMENTS DE STOCK
+// 16. MOUVEMENTS DE STOCK
 // ======================================================
 
 export async function getStockMovements() {
-
     return await getAll("stockMovements");
-
 }
 
 
 // ======================================================
-// 18. HISTORIQUE DES PAIEMENTS
-// ======================================================
-
-export async function getCustomerPayments() {
-
-    return await getAll("payments");
-
-}
-
-
-// ======================================================
-// 19. RECHERCHE DES VENTES PAR CLIENT
+// 17. VENTES PAR CLIENT
 // ======================================================
 
 export async function getCustomerSales(customerId) {
-
     const sales = await getSales();
 
     return sales.filter(
         sale => sale.customerId === customerId
     );
-
 }
 
 
 // ======================================================
-// 20. RÉSUMÉ FINANCIER
+// 18. RÉSUMÉ FINANCIER
 // ======================================================
 
 export async function getFinancialSummary() {
 
     const [
-
         sales,
         expenses,
         losses,
-        purchases
-
+        purchases,
+        products,
+        customers,
+        suppliers
     ] = await Promise.all([
 
         getSales(),
-
         getExpenses(),
-
         getLosses(),
-
-        getPurchases()
+        getPurchases(),
+        getProducts(),
+        getCustomers(),
+        getSuppliers()
 
     ]);
 
     const today = new Date().toDateString();
 
-    const todaySales = sales.filter(sale => {
-
-        const date = sale.date?.toDate
-            ? sale.date.toDate()
-            : new Date(sale.date);
-
-        return date.toDateString() === today;
-
-    });
-
-    const todayExpenses = expenses.filter(item => {
-
+    function isToday(item) {
         const date = item.date?.toDate
             ? item.date.toDate()
             : new Date(item.date);
 
-        return date.toDateString() === today;
+        return !isNaN(date.getTime()) &&
+            date.toDateString() === today;
+    }
 
-    });
+    const todaySales = sales.filter(isToday);
+    const todayExpenses = expenses.filter(isToday);
+    const todayLosses = losses.filter(isToday);
 
     const totalSales = sales.reduce(
         (sum, item) => sum + toNumber(item.total),
@@ -1300,9 +1152,7 @@ export async function getFinancialSummary() {
     );
 
     const totalProfit = sales.reduce(
-        (sum, item) => sum + toNumber(
-            item.profit ?? item.estimatedProfit
-        ),
+        (sum, item) => sum + toNumber(item.profit),
         0
     );
 
@@ -1336,51 +1186,74 @@ export async function getFinancialSummary() {
         0
     );
 
+    const dailyLosses = todayLosses.reduce(
+        (sum, item) => sum + toNumber(item.estimatedValue),
+        0
+    );
+
+    const totalCustomerDebt = customers.reduce(
+        (sum, item) => sum + toNumber(item.debt),
+        0
+    );
+
+    const totalSupplierDebt = suppliers.reduce(
+        (sum, item) => sum + toNumber(item.debt),
+        0
+    );
+
+    const stockValue = products.reduce(
+        (sum, item) =>
+            sum +
+            getStock(item) *
+            toNumber(item.purchasePrice),
+        0
+    );
+
     return {
 
         totalSales,
-
         totalProfit,
-
         totalExpenses,
-
         totalPurchases,
-
         totalLosses,
 
         dailySales,
-
         dailyProfit,
-
         dailyExpenses,
+        dailyLosses,
 
         dailyNetResult:
-            dailyProfit - dailyExpenses,
+            dailyProfit - dailyExpenses - dailyLosses,
 
         estimatedNetResult:
-            totalProfit - totalExpenses - totalLosses
+            totalProfit - totalExpenses - totalLosses,
 
+        totalCustomerDebt,
+        totalSupplierDebt,
+
+        stockValue,
+
+        productCount: products.length,
+
+        totalStockBottles: products.reduce(
+            (sum, item) => sum + getStock(item),
+            0
+        )
     };
-
 }
 
 
 // ======================================================
-// 21. SUPPRESSION D'UNE VENTE
+// 19. ANNULATION SÉCURISÉE D'UNE VENTE
 // ======================================================
 
 export async function deleteSale(saleId) {
 
     return await runTransaction(db, async transaction => {
 
-        const saleRef = getDocument(
-            "sales",
-            saleId
-        );
+        const saleRef = getDocument("sales", saleId);
 
-        const saleSnapshot = await transaction.get(
-            saleRef
-        );
+        const saleSnapshot = await transaction.get(saleRef);
 
         if (!saleSnapshot.exists()) {
             throw new Error("Vente introuvable.");
@@ -1388,48 +1261,58 @@ export async function deleteSale(saleId) {
 
         const sale = saleSnapshot.data();
 
+        // Une vente déjà payée ne peut pas être supprimée
+        // automatiquement : il faut gérer son remboursement.
+        if (toNumber(sale.amountPaid) > 0) {
+            throw new Error(
+                "Cette vente comporte déjà un paiement. " +
+                "Une procédure de remboursement est nécessaire."
+            );
+        }
+
         const items = sale.items || [];
+
+        const grouped = new Map();
+
+        for (const item of items) {
+            const id = item.productId;
+
+            const current = grouped.get(id) || {
+                quantity: 0
+            };
+
+            current.quantity += toNumber(item.quantity);
+
+            grouped.set(id, current);
+        }
 
         const products = [];
 
-        for (const item of items) {
+        // Toutes les lectures avant les écritures.
+        for (const [productId, item] of grouped) {
 
             const productRef = getDocument(
                 "products",
-                item.productId
+                productId
             );
 
-            const snapshot = await transaction.get(
-                productRef
-            );
+            const snapshot = await transaction.get(productRef);
 
             if (!snapshot.exists()) {
                 throw new Error(
-                    `Produit introuvable : ${item.productName}`
+                    "Un produit de cette vente est introuvable."
                 );
             }
 
             products.push({
-
-                ref: productRef,
-
-                data: snapshot.data(),
-
-                quantity: toNumber(item.quantity),
-
-                units: toNumber(
-                    snapshot.data().unitsPerCrate ??
-                    snapshot.data().units ??
-                    12
-                )
-
+                productRef,
+                product: snapshot.data(),
+                quantity: item.quantity
             });
-
         }
 
         let customerRef = null;
-
-        let customerData = null;
+        let customer = null;
 
         if (sale.customerId) {
 
@@ -1438,67 +1321,67 @@ export async function deleteSale(saleId) {
                 sale.customerId
             );
 
-            const snapshot = await transaction.get(
-                customerRef
-            );
+            const snapshot = await transaction.get(customerRef);
 
             if (snapshot.exists()) {
-                customerData = snapshot.data();
+                customer = snapshot.data();
             }
+        }
 
+        if (
+            customer &&
+            toNumber(customer.debt) < toNumber(sale.debt)
+        ) {
+            throw new Error(
+                "Cette dette a été modifiée ou partiellement réglée. " +
+                "Annulation automatique impossible."
+            );
         }
 
         for (const item of products) {
 
-            const currentStock = toNumber(
-                item.data.totalBottles ??
-                toNumber(item.data.quantity ?? item.data.qty) * item.units
-            );
+            const oldStock = getStock(item.product);
 
-            const newStock = currentStock + item.quantity;
+            const newStock = oldStock + item.quantity;
 
-            transaction.update(item.ref, {
-
+            transaction.update(item.productRef, {
                 totalBottles: newStock,
-
-                quantity: Math.floor(newStock / item.units),
-
-                qty: Math.floor(newStock / item.units),
-
+                quantity: newStock,
+                qty: newStock,
                 updatedAt: serverTimestamp()
-
             });
 
+            createMovement(transaction, {
+                productId: item.productRef.id,
+                productName: item.product.name,
+                quantity: item.quantity,
+                previousStock: oldStock,
+                newStock,
+                reason: "Annulation de vente",
+                saleId
+            });
         }
 
-        if (customerRef && customerData) {
-
+        if (customerRef && customer) {
             transaction.update(customerRef, {
-
-                debt: Math.max(
-                    0,
-                    toNumber(customerData.debt) -
-                    toNumber(sale.debt)
-                ),
+                debt:
+                    toNumber(customer.debt) -
+                    toNumber(sale.debt),
 
                 totalPurchases: Math.max(
                     0,
-                    toNumber(customerData.totalPurchases) -
+                    toNumber(customer.totalPurchases) -
                     toNumber(sale.total)
                 ),
 
                 updatedAt: serverTimestamp()
-
             });
-
         }
 
         transaction.delete(saleRef);
 
         return true;
-
     });
-
 }
 
 
