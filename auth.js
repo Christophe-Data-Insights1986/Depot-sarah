@@ -1,17 +1,17 @@
 // ======================================================
 // DÉPÔT SARAH V2
-// AUTHENTIFICATION ET GESTION DES ACCÈS
+// AUTH.JS — AUTHENTIFICATION ET AUTORISATIONS
 // ======================================================
 
 import { auth, db, googleProvider } from "./firebase.js";
 
 import {
-    signInWithEmailAndPassword,
     createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
     signInWithPopup,
     signOut,
-    onAuthStateChanged,
-    updateProfile
+    updateProfile,
+    onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
 import {
@@ -27,66 +27,72 @@ import {
 
 export const ADMIN_EMAIL = "christopheatangana2@gmail.com";
 
-let initialized = false;
+let currentAccessUser = null;
+let authInitialized = false;
 
 // ======================================================
-// ÉLÉMENTS HTML
-// ======================================================
-
-const loginScreen = document.getElementById("login-screen");
-const appContainer = document.getElementById("app-container");
-
-const loginForm = document.getElementById("login-form");
-const registerForm = document.getElementById("register-form");
-
-const authMessage = document.getElementById("auth-message");
-
-const googleLogin = document.getElementById("google-login");
-const showRegister = document.getElementById("show-register");
-
-const logoutButton = document.getElementById("logout-button");
-
-// ======================================================
-// MESSAGES
-// ======================================================
-
-function showMessage(message, error = false) {
-    if (!authMessage) return;
-
-    authMessage.textContent = message;
-    authMessage.style.color = error ? "#dc2626" : "#166534";
-}
-
-// ======================================================
-// ADMINISTRATEUR
+// VÉRIFICATION ADMINISTRATEUR
 // ======================================================
 
 export function isAdmin(user = auth.currentUser) {
-    return !!user &&
-        user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    return Boolean(
+        user &&
+        user.email &&
+        user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
+    );
 }
 
 // ======================================================
-// CRÉATION D'UNE DEMANDE D'ACCÈS
+// MESSAGE D'AUTHENTIFICATION
 // ======================================================
 
-async function createAccessRequest(user, name = "") {
+function showAuthMessage(message, type = "error") {
+    const element = document.getElementById("auth-message");
 
-    if (isAdmin(user)) return;
+    if (!element) return;
+
+    element.textContent = message;
+    element.className = `auth-message ${type}`;
+}
+
+// ======================================================
+// DEMANDE D'ACCÈS
+// ======================================================
+
+export async function createAccessRequest(user, name = "") {
+
+    if (!user) {
+        throw new Error("Utilisateur non connecté.");
+    }
+
+    if (isAdmin(user)) {
+        return true;
+    }
 
     const requestRef = doc(db, "userRequests", user.uid);
     const requestSnap = await getDoc(requestRef);
 
-    if (!requestSnap.exists()) {
+    if (requestSnap.exists()) {
+        const existing = requestSnap.data();
 
-        await setDoc(requestRef, {
-            uid: user.uid,
-            email: user.email || "",
-            name: name || user.displayName || "",
-            status: "pending",
-            createdAt: serverTimestamp()
-        });
+        if (existing.status === "approved") {
+            return true;
+        }
+
+        if (existing.status === "pending") {
+            return false;
+        }
     }
+
+    await setDoc(requestRef, {
+        uid: user.uid,
+        email: user.email || "",
+        name: name || user.displayName || "",
+        status: "pending",
+        createdAt: serverTimestamp()
+    });
+
+    return false;
 }
 
 // ======================================================
@@ -102,237 +108,341 @@ export async function checkUserAccess(user) {
     const userRef = doc(db, "authorizedUsers", user.uid);
     const userSnap = await getDoc(userRef);
 
-    if (!userSnap.exists()) return false;
+    if (!userSnap.exists()) {
+        return false;
+    }
 
     const data = userSnap.data();
 
-    return data.status === "approved" ||
-        data.approved === true;
-}
-
-// ======================================================
-// CONNEXION EMAIL
-// ======================================================
-
-if (loginForm) {
-
-    loginForm.addEventListener("submit", async (event) => {
-
-        event.preventDefault();
-
-        const email = document.getElementById("login-email").value.trim();
-        const password = document.getElementById("login-password").value;
-
-        try {
-
-            showMessage("Connexion en cours...");
-
-            await signInWithEmailAndPassword(auth, email, password);
-
-        } catch (error) {
-
-            showMessage(
-                "Erreur de connexion : " + error.message,
-                true
-            );
-        }
-    });
+    return data.status === "approved" || data.approved === true;
 }
 
 // ======================================================
 // INSCRIPTION
 // ======================================================
 
-if (registerForm) {
+export async function registerWithEmail(name, email, password) {
 
-    registerForm.addEventListener("submit", async (event) => {
+    try {
 
-        event.preventDefault();
+        const result = await createUserWithEmailAndPassword(
+            auth,
+            email.trim(),
+            password
+        );
 
-        const name = document.getElementById("register-name").value.trim();
-        const email = document.getElementById("register-email").value.trim();
-        const password = document.getElementById("register-password").value;
+        await updateProfile(result.user, {
+            displayName: name.trim()
+        });
 
-        try {
+        if (isAdmin(result.user)) {
 
-            showMessage("Création du compte...");
-
-            const credential = await createUserWithEmailAndPassword(
-                auth,
-                email,
-                password
+            await setDoc(
+                doc(db, "authorizedUsers", result.user.uid),
+                {
+                    uid: result.user.uid,
+                    email: result.user.email,
+                    name: name.trim(),
+                    status: "approved",
+                    approved: true,
+                    role: "admin",
+                    createdAt: serverTimestamp()
+                }
             );
 
-            await updateProfile(credential.user, {
-                displayName: name
-            });
+            showAuthMessage("Compte administrateur créé.", "success");
 
-            if (isAdmin(credential.user)) {
-
-                await setDoc(
-                    doc(db, "authorizedUsers", credential.user.uid),
-                    {
-                        uid: credential.user.uid,
-                        email: email,
-                        name: name,
-                        status: "approved",
-                        approved: true,
-                        role: "admin",
-                        createdAt: serverTimestamp()
-                    }
-                );
-
-            } else {
-
-                await createAccessRequest(credential.user, name);
-            }
-
-            showMessage(
-                "Compte créé. Votre accès sera disponible après validation."
-            );
-
-        } catch (error) {
-
-            showMessage(
-                "Erreur d'inscription : " + error.message,
-                true
-            );
+            return result.user;
         }
-    });
+
+        await createAccessRequest(result.user, name);
+
+        showAuthMessage(
+            "Compte créé. Votre demande attend l'approbation de l'administrateur.",
+            "success"
+        );
+
+        return result.user;
+
+    } catch (error) {
+
+        showAuthMessage(getFriendlyError(error));
+
+        throw error;
+    }
+}
+
+// ======================================================
+// CONNEXION EMAIL
+// ======================================================
+
+export async function loginWithEmail(email, password) {
+
+    try {
+
+        const result = await signInWithEmailAndPassword(
+            auth,
+            email.trim(),
+            password
+        );
+
+        return result.user;
+
+    } catch (error) {
+
+        showAuthMessage(getFriendlyError(error));
+
+        throw error;
+    }
 }
 
 // ======================================================
 // CONNEXION GOOGLE
 // ======================================================
 
-if (googleLogin) {
+export async function loginWithGoogle() {
 
-    googleLogin.addEventListener("click", async () => {
+    try {
 
-        try {
+        const result = await signInWithPopup(
+            auth,
+            googleProvider
+        );
 
-            showMessage("Connexion Google en cours...");
+        const user = result.user;
 
-            const result = await signInWithPopup(
-                auth,
-                googleProvider
-            );
-
-            if (!isAdmin(result.user)) {
-                await createAccessRequest(result.user);
-            }
-
-        } catch (error) {
-
-            showMessage(
-                "Erreur Google : " + error.message,
-                true
-            );
+        if (!isAdmin(user)) {
+            await createAccessRequest(user);
         }
-    });
-}
 
-// ======================================================
-// AFFICHER LE FORMULAIRE D'INSCRIPTION
-// ======================================================
+        return user;
 
-if (showRegister && registerForm && loginForm) {
+    } catch (error) {
 
-    showRegister.addEventListener("click", () => {
+        showAuthMessage(getFriendlyError(error));
 
-        loginForm.style.display = "none";
-        registerForm.style.display = "block";
-
-        showMessage("Créer un nouveau compte.");
-    });
+        throw error;
+    }
 }
 
 // ======================================================
 // DÉCONNEXION
 // ======================================================
 
-if (logoutButton) {
+export async function logoutUser() {
 
-    logoutButton.addEventListener("click", async () => {
-
-        try {
-            await signOut(auth);
-        } catch (error) {
-            console.error("Erreur de déconnexion :", error);
-        }
-    });
+    try {
+        await signOut(auth);
+        currentAccessUser = null;
+    } catch (error) {
+        console.error("Erreur de déconnexion :", error);
+        throw error;
+    }
 }
 
 // ======================================================
-// SURVEILLANCE DE L'AUTHENTIFICATION
+// ERREURS EXPLICITES
+// ======================================================
+
+function getFriendlyError(error) {
+
+    const errors = {
+        "auth/invalid-email": "Adresse e-mail invalide.",
+        "auth/user-not-found": "Aucun compte ne correspond à cette adresse.",
+        "auth/wrong-password": "Mot de passe incorrect.",
+        "auth/invalid-credential": "Identifiants incorrects.",
+        "auth/email-already-in-use": "Cette adresse possède déjà un compte.",
+        "auth/weak-password": "Le mot de passe doit contenir au moins 6 caractères.",
+        "auth/popup-closed-by-user": "Connexion Google annulée.",
+        "auth/network-request-failed": "Problème de connexion Internet.",
+        "auth/too-many-requests": "Trop de tentatives. Réessayez plus tard."
+    };
+
+    return errors[error.code] || error.message || "Une erreur est survenue.";
+}
+
+// ======================================================
+// INTERFACE DE CONNEXION
+// ======================================================
+
+function showLoginScreen() {
+
+    const login = document.getElementById("login-screen");
+    const app = document.getElementById("app-container");
+
+    if (login) login.hidden = false;
+    if (app) app.hidden = true;
+}
+
+// ======================================================
+// INTERFACE DE L'APPLICATION
+// ======================================================
+
+function showApplicationScreen(user, admin) {
+
+    const login = document.getElementById("login-screen");
+    const app = document.getElementById("app-container");
+
+    if (login) login.hidden = true;
+    if (app) app.hidden = false;
+
+    const userElement = document.getElementById("current-user");
+
+    if (userElement) {
+        userElement.textContent =
+            `${user.displayName || user.email}${admin ? " (Administrateur)" : ""}`;
+    }
+
+    document.dispatchEvent(
+        new CustomEvent("sarah-auth-ready", {
+            detail: {
+                user,
+                isAdmin: admin
+            }
+        })
+    );
+}
+
+// ======================================================
+// ÉCRAN D'ATTENTE
+// ======================================================
+
+function showPendingScreen() {
+
+    const login = document.getElementById("login-screen");
+    const app = document.getElementById("app-container");
+
+    if (login) login.hidden = false;
+    if (app) app.hidden = true;
+
+    showAuthMessage(
+        "Votre compte est enregistré. En attente de l'approbation de l'administrateur.",
+        "warning"
+    );
+}
+
+// ======================================================
+// INITIALISATION
 // ======================================================
 
 export function initAuth() {
 
-    if (initialized) return;
+    if (authInitialized) return;
 
-    initialized = true;
+    authInitialized = true;
 
-    onAuthStateChanged(auth, async (user) => {
+    onAuthStateChanged(auth, async user => {
 
         if (!user) {
 
-            if (loginScreen) loginScreen.style.display = "block";
-            if (appContainer) appContainer.style.display = "none";
+            currentAccessUser = null;
+            showLoginScreen();
+
+            document.dispatchEvent(
+                new CustomEvent("sarah-auth-logged-out")
+            );
 
             return;
         }
 
         try {
 
+            const admin = isAdmin(user);
             const approved = await checkUserAccess(user);
 
             if (!approved) {
 
-                if (loginScreen) loginScreen.style.display = "block";
-                if (appContainer) appContainer.style.display = "none";
+                await createAccessRequest(user);
 
-                showMessage(
-                    "Votre compte est en attente d'approbation par l'administrateur.",
-                    true
-                );
+                currentAccessUser = null;
+                showPendingScreen();
 
                 return;
             }
 
-            if (loginScreen) loginScreen.style.display = "none";
-            if (appContainer) appContainer.style.display = "block";
+            currentAccessUser = user.uid;
 
-            const currentUser = document.getElementById("current-user");
-
-            if (currentUser) {
-                currentUser.textContent =
-                    user.displayName || user.email;
-            }
-
-            window.dispatchEvent(
-                new CustomEvent("sarah-auth-ready", {
-                    detail: {
-                        user: user,
-                        isAdmin: isAdmin(user)
-                    }
-                })
-            );
+            showApplicationScreen(user, admin);
 
         } catch (error) {
 
-            console.error("Erreur de vérification :", error);
+            console.error("Erreur de vérification d'accès :", error);
 
-            showMessage(
-                "Impossible de vérifier les autorisations. Vérifiez votre connexion.",
-                true
+            currentAccessUser = null;
+            showLoginScreen();
+
+            showAuthMessage(
+                "Impossible de vérifier vos autorisations. Vérifiez votre connexion Internet."
             );
         }
     });
+
+    // Formulaire de connexion
+    const loginForm = document.getElementById("login-form");
+
+    if (loginForm) {
+
+        loginForm.addEventListener("submit", async event => {
+
+            event.preventDefault();
+
+            const email = document.getElementById("login-email").value;
+            const password = document.getElementById("login-password").value;
+
+            try {
+                await loginWithEmail(email, password);
+            } catch (error) {
+                console.error(error);
+            }
+        });
+    }
+
+    // Formulaire d'inscription
+    const registerForm = document.getElementById("register-form");
+
+    if (registerForm) {
+
+        registerForm.addEventListener("submit", async event => {
+
+            event.preventDefault();
+
+            const name = document.getElementById("register-name").value;
+            const email = document.getElementById("register-email").value;
+            const password = document.getElementById("register-password").value;
+
+            try {
+                await registerWithEmail(name, email, password);
+            } catch (error) {
+                console.error(error);
+            }
+        });
+    }
+
+    // Connexion Google
+    const googleButton = document.getElementById("google-login");
+
+    if (googleButton) {
+
+        googleButton.addEventListener("click", async () => {
+
+            try {
+                await loginWithGoogle();
+            } catch (error) {
+                console.error(error);
+            }
+        });
+    }
+
+    // Déconnexion
+    const logoutButton = document.getElementById("logout-button");
+
+    if (logoutButton) {
+        logoutButton.addEventListener("click", logoutUser);
+    }
 }
 
 // ======================================================
-// INITIALISATION
+// LANCEMENT
 // ======================================================
 
 initAuth();
