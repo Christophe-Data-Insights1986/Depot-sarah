@@ -2381,26 +2381,14 @@ async function initializeApplication(user, isAdmin) {
 
 
 // ======================================================
-// 32. GESTION DE LA DÉCONNEXION
+// CORRECTION DE LA NAVIGATION
 // ======================================================
 
-window.addEventListener("sarah-auth-logged-out", () => {
+document.addEventListener("DOMContentLoaded", () => {
 
-    currentUser = null;
+    initializeNavigation();
 
-    currentIsAdmin = false;
-
-    products = [];
-    customers = [];
-    sales = [];
-    suppliers = [];
-    purchases = [];
-    expenses = [];
-    losses = [];
-
-    loading = false;
-
-    showSyncStatus("Déconnecté.");
+    console.log("Navigation Dépôt Sarah activée.");
 
 });
 
