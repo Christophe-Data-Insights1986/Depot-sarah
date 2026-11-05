@@ -519,6 +519,14 @@
 
 
     <script type="module" src="app.js"></script>
-
+<script>
+if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./service-worker.js")
+            .then(() => console.log("Dépôt Sarah : Service Worker activé"))
+            .catch(error => console.error("Erreur Service Worker :", error));
+    });
+}
+</script>
 </body>
 </html>
