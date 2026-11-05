@@ -1,8 +1,7 @@
 // ======================================================
 // DÉPÔT SARAH V2
-// DATABASE.JS
-// MOTEUR CENTRAL DE GESTION DES DONNÉES
-// FIREBASE 10.14.1
+// DATABASE.JS — MOTEUR CENTRAL DES DONNÉES
+// FIREBASE SDK 10.14.1
 // ======================================================
 
 import { db } from "./firebase.js";
@@ -19,9 +18,8 @@ import {
     runTransaction
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
-
 // ======================================================
-// 1. COLLECTIONS FIRESTORE
+// 1. COLLECTIONS
 // ======================================================
 
 export const COLLECTIONS = {
@@ -35,7 +33,6 @@ export const COLLECTIONS = {
     losses: "losses",
     stockMovements: "stockMovements"
 };
-
 
 // ======================================================
 // 2. OUTILS GÉNÉRAUX
@@ -51,23 +48,35 @@ function getCollection(name) {
     return collection(db, collectionName);
 }
 
-
 function getDocument(name, id) {
     return doc(db, COLLECTIONS[name] || name, id);
 }
 
-
 function generateId() {
-    return crypto.randomUUID();
-}
+    if (globalThis.crypto?.randomUUID) {
+        return globalThis.crypto.randomUUID();
+    }
 
+    return (
+        Date.now().toString(36) +
+        Math.random().toString(36).slice(2)
+    );
+}
 
 function toNumber(value, fallback = 0) {
     const number = Number(value);
-
     return Number.isFinite(number) ? number : fallback;
 }
 
+function validatePositive(value, message) {
+    const number = toNumber(value);
+
+    if (number <= 0) {
+        throw new Error(message);
+    }
+
+    return number;
+}
 
 function cleanData(data) {
     const result = { ...data };
@@ -79,11 +88,9 @@ function cleanData(data) {
     return result;
 }
 
-
 function nowDate() {
     return new Date().toISOString();
 }
-
 
 function getStock(product) {
     if (product.totalBottles !== undefined) {
@@ -97,46 +104,33 @@ function getStock(product) {
     return toNumber(product.quantity);
 }
 
-
-function normalizeRecord(id, data) {
-    const stock = getStock(data);
-
-    const units = toNumber(
-        data.unitsPerCrate ?? data.units,
-        12
-    );
-
-    const profit = toNumber(
-        data.profit ?? data.estimatedProfit
-    );
-
-    return {
+function normalizeRecord(id, data, collectionName) {
+    const record = {
         id,
-        ...data,
-
-        quantity: stock,
-        qty: stock,
-        totalBottles: stock,
-
-        unitsPerCrate: units,
-        units,
-
-        profit,
-        estimatedProfit: profit
+        ...data
     };
-}
 
+    // Normalisation réservée aux produits.
+    if (collectionName === "products") {
+        const stock = getStock(data);
 
-function validatePositive(value, message) {
-    const number = toNumber(value);
+        const units = toNumber(
+            data.unitsPerCrate ?? data.units,
+            12
+        );
 
-    if (number <= 0) {
-        throw new Error(message);
+        return {
+            ...record,
+            quantity: stock,
+            qty: stock,
+            totalBottles: stock,
+            unitsPerCrate: units,
+            units
+        };
     }
 
-    return number;
+    return record;
 }
-
 
 function createMovement(transaction, data) {
     const reference = doc(getCollection("stockMovements"));
@@ -148,19 +142,29 @@ function createMovement(transaction, data) {
     });
 }
 
+function calculateDebt(total, paid) {
+    if (paid < 0 || paid > total) {
+        throw new Error("Montant payé invalide.");
+    }
+
+    return total - paid;
+}
 
 // ======================================================
-// 3. LECTURE GÉNÉRALE
+// 3. LECTURE DES DONNÉES
 // ======================================================
 
 export async function getAll(name) {
     const snapshot = await getDocs(getCollection(name));
 
     return snapshot.docs.map(item =>
-        normalizeRecord(item.id, item.data())
+        normalizeRecord(
+            item.id,
+            item.data(),
+            COLLECTIONS[name] || name
+        )
     );
 }
-
 
 export async function getById(name, id) {
     const snapshot = await getDoc(
@@ -173,10 +177,10 @@ export async function getById(name, id) {
 
     return normalizeRecord(
         snapshot.id,
-        snapshot.data()
+        snapshot.data(),
+        COLLECTIONS[name] || name
     );
 }
-
 
 // ======================================================
 // 4. CRÉATION GÉNÉRALE
@@ -200,7 +204,6 @@ export async function createRecord(name, data) {
     };
 }
 
-
 // ======================================================
 // 5. MODIFICATION GÉNÉRALE
 // ======================================================
@@ -217,17 +220,14 @@ export async function updateRecord(name, id, data) {
     return await getById(name, id);
 }
 
-
 // ======================================================
 // 6. SUPPRESSION GÉNÉRALE
 // ======================================================
 
 export async function removeRecord(name, id) {
     await deleteDoc(getDocument(name, id));
-
     return true;
 }
-
 
 // ======================================================
 // 7. PRODUITS
@@ -243,31 +243,36 @@ export async function addProduct(data) {
         data.totalBottles ?? data.qty ?? data.quantity
     );
 
-    if (stock < 0) {
+    if (!Number.isInteger(stock) || stock < 0) {
         throw new Error("Le stock initial est invalide.");
     }
 
+    const purchasePrice = toNumber(
+        data.purchasePrice ?? data.costPrice
+    );
+
+    const sellingPrice = toNumber(
+        data.sellingPrice ?? data.bottlePrice
+    );
+
+    if (purchasePrice < 0 || sellingPrice < 0) {
+        throw new Error("Les prix ne peuvent pas être négatifs.");
+    }
+
     const product = {
-        name: data.name || "Produit sans nom",
+        name: data.name?.trim() || "Produit sans nom",
         brand: data.brand || "",
         format: data.format || "",
 
         unitsPerCrate: units,
         units,
 
+        totalBottles: stock,
         quantity: stock,
         qty: stock,
-        totalBottles: stock,
 
-        purchasePrice: toNumber(
-            data.purchasePrice ??
-            data.costPrice
-        ),
-
-        sellingPrice: toNumber(
-            data.sellingPrice ??
-            data.bottlePrice
-        ),
+        purchasePrice,
+        sellingPrice,
 
         cratePrice: toNumber(data.cratePrice),
 
@@ -279,27 +284,26 @@ export async function addProduct(data) {
     return await createRecord("products", product);
 }
 
-
 export async function getProducts() {
     return await getAll("products");
 }
 
-
 export async function updateProduct(id, data) {
     const updates = { ...data };
 
-    if (
+    const stockProvided =
         updates.totalBottles !== undefined ||
         updates.qty !== undefined ||
-        updates.quantity !== undefined
-    ) {
+        updates.quantity !== undefined;
+
+    if (stockProvided) {
         const stock = toNumber(
             updates.totalBottles ??
             updates.qty ??
             updates.quantity
         );
 
-        if (stock < 0) {
+        if (!Number.isInteger(stock) || stock < 0) {
             throw new Error("Stock invalide.");
         }
 
@@ -308,14 +312,26 @@ export async function updateProduct(id, data) {
         updates.qty = stock;
     }
 
+    if (
+        updates.purchasePrice !== undefined &&
+        toNumber(updates.purchasePrice) < 0
+    ) {
+        throw new Error("Prix d'achat invalide.");
+    }
+
+    if (
+        updates.sellingPrice !== undefined &&
+        toNumber(updates.sellingPrice) < 0
+    ) {
+        throw new Error("Prix de vente invalide.");
+    }
+
     return await updateRecord("products", id, updates);
 }
-
 
 export async function deleteProduct(id) {
     return await removeRecord("products", id);
 }
-
 
 // ======================================================
 // 8. AJUSTEMENT DU STOCK
@@ -328,8 +344,11 @@ export async function updateStock(
 ) {
     const change = toNumber(bottleChange);
 
-    return await runTransaction(db, async transaction => {
+    if (!Number.isInteger(change) || change === 0) {
+        throw new Error("Variation de stock invalide.");
+    }
 
+    return await runTransaction(db, async transaction => {
         const productRef = getDocument(
             "products",
             productId
@@ -370,14 +389,13 @@ export async function updateStock(
     });
 }
 
-
 // ======================================================
 // 9. CLIENTS
 // ======================================================
 
 export async function addCustomer(data) {
     return await createRecord("customers", {
-        name: data.name || "",
+        name: data.name?.trim() || "",
         phone: data.phone || "",
         address: data.address || "",
         debt: toNumber(data.debt),
@@ -385,16 +403,13 @@ export async function addCustomer(data) {
     });
 }
 
-
 export async function getCustomers() {
     return await getAll("customers");
 }
 
-
 export async function updateCustomer(id, data) {
     return await updateRecord("customers", id, data);
 }
-
 
 // ======================================================
 // 10. FOURNISSEURS
@@ -402,18 +417,16 @@ export async function updateCustomer(id, data) {
 
 export async function addSupplier(data) {
     return await createRecord("suppliers", {
-        name: data.name || "",
+        name: data.name?.trim() || "",
         phone: data.phone || "",
         address: data.address || "",
         debt: toNumber(data.debt)
     });
 }
 
-
 export async function getSuppliers() {
     return await getAll("suppliers");
 }
-
 
 // ======================================================
 // 11. VENTES
@@ -423,9 +436,11 @@ export async function createSale(data) {
     const items = data.items || [{
         productId: data.productId,
         crates: data.crates ?? data.casiers ?? 0,
-        extraBottles: data.extraBottles ?? data.bottles ?? 0,
+        extraBottles:
+            data.extraBottles ?? data.bottles ?? 0,
         cratePrice: data.cratePrice ?? data.prixCasier,
-        bottlePrice: data.bottlePrice ?? data.prixBouteille
+        bottlePrice:
+            data.bottlePrice ?? data.prixBouteille
     }];
 
     if (!items.length) {
@@ -433,10 +448,10 @@ export async function createSale(data) {
     }
 
     const saleId = data.operationId || generateId();
+
     const saleRef = getDocument("sales", saleId);
 
     return await runTransaction(db, async transaction => {
-
         const existingSale = await transaction.get(saleRef);
 
         if (existingSale.exists()) {
@@ -457,19 +472,22 @@ export async function createSale(data) {
             const crates = toNumber(item.crates);
             const extra = toNumber(item.extraBottles);
 
-            if (crates < 0 || extra < 0) {
-                throw new Error("Quantité invalide.");
+            if (
+                !Number.isInteger(crates) ||
+                !Number.isInteger(extra) ||
+                crates < 0 ||
+                extra < 0
+            ) {
+                throw new Error("Quantité de vente invalide.");
             }
 
             if (crates === 0 && extra === 0) {
                 continue;
             }
 
-            const key = item.productId;
-
-            if (!grouped.has(key)) {
-                grouped.set(key, {
-                    productId: key,
+            if (!grouped.has(item.productId)) {
+                grouped.set(item.productId, {
+                    productId: item.productId,
                     crates: 0,
                     extraBottles: 0,
                     cratePrice: toNumber(item.cratePrice),
@@ -477,7 +495,7 @@ export async function createSale(data) {
                 });
             }
 
-            const group = grouped.get(key);
+            const group = grouped.get(item.productId);
 
             group.crates += crates;
             group.extraBottles += extra;
@@ -497,7 +515,7 @@ export async function createSale(data) {
         let total = 0;
         let totalCost = 0;
 
-        // Lecture de tous les produits avant les écritures.
+        // Toutes les lectures de produits.
         for (const item of grouped.values()) {
             const productRef = getDocument(
                 "products",
@@ -529,11 +547,6 @@ export async function createSale(data) {
                 );
             }
 
-            // CORRECTION : calcul du prix du casier.
-            // Si aucun prix de casier n'est renseigné,
-            // on utilise le prix d'une bouteille multiplié
-            // par le nombre de bouteilles du casier.
-
             const bottlePrice =
                 item.bottlePrice > 0
                     ? item.bottlePrice
@@ -549,9 +562,16 @@ export async function createSale(data) {
                     );
 
             const costPrice = toNumber(
-                product.purchasePrice ??
-                product.costPrice
+                product.purchasePrice ?? product.costPrice
             );
+
+            if (
+                bottlePrice < 0 ||
+                cratePrice < 0 ||
+                costPrice < 0
+            ) {
+                throw new Error("Prix de vente ou d'achat invalide.");
+            }
 
             const lineTotal =
                 item.crates * cratePrice +
@@ -582,8 +602,9 @@ export async function createSale(data) {
             productSnapshots.push({
                 productRef,
                 product,
-                newStock,
-                quantity
+                quantity,
+                oldStock: stock,
+                newStock
             });
         }
 
@@ -610,11 +631,7 @@ export async function createSale(data) {
             );
         }
 
-        if (amountPaid < 0 || amountPaid > total) {
-            throw new Error("Montant payé invalide.");
-        }
-
-        const debt = total - amountPaid;
+        const debt = calculateDebt(total, amountPaid);
 
         const customerId = data.customerId || null;
 
@@ -644,7 +661,7 @@ export async function createSale(data) {
             customer = customerSnapshot.data();
         }
 
-        // ÉCRITURES : mise à jour des stocks.
+        // ÉCRITURES APRÈS LES LECTURES.
         for (const item of productSnapshots) {
             transaction.update(item.productRef, {
                 totalBottles: item.newStock,
@@ -657,7 +674,7 @@ export async function createSale(data) {
                 productId: item.productRef.id,
                 productName: item.product.name,
                 quantity: -item.quantity,
-                previousStock: getStock(item.product),
+                previousStock: item.oldStock,
                 newStock: item.newStock,
                 reason: "Vente",
                 saleId
@@ -700,8 +717,10 @@ export async function createSale(data) {
         if (customerRef && customer) {
             transaction.update(customerRef, {
                 debt: toNumber(customer.debt) + debt,
+
                 totalPurchases:
                     toNumber(customer.totalPurchases) + total,
+
                 updatedAt: serverTimestamp()
             });
         }
@@ -717,14 +736,12 @@ export async function createSale(data) {
     });
 }
 
-
 export async function getSales() {
     return await getAll("sales");
 }
 
-
 // ======================================================
-// 12. PAIEMENTS DES CLIENTS
+// 12. PAIEMENTS CLIENTS
 // ======================================================
 
 export async function recordCustomerPayment(data) {
@@ -733,7 +750,24 @@ export async function recordCustomerPayment(data) {
         "Montant de paiement invalide."
     );
 
+    if (!data.customerId) {
+        throw new Error("Client non identifié.");
+    }
+
+    const paymentId = data.operationId || generateId();
+
+    const paymentRef = getDocument("payments", paymentId);
+
     return await runTransaction(db, async transaction => {
+        const existingPayment = await transaction.get(paymentRef);
+
+        if (existingPayment.exists()) {
+            return {
+                id: paymentId,
+                ...existingPayment.data(),
+                alreadyProcessed: true
+            };
+        }
 
         const customerRef = getDocument(
             "customers",
@@ -747,6 +781,7 @@ export async function recordCustomerPayment(data) {
         }
 
         const customer = snapshot.data();
+
         const currentDebt = toNumber(customer.debt);
 
         if (amount > currentDebt) {
@@ -755,10 +790,10 @@ export async function recordCustomerPayment(data) {
             );
         }
 
-        const paymentRef = doc(getCollection("payments"));
+        const remainingDebt = currentDebt - amount;
 
         transaction.update(customerRef, {
-            debt: currentDebt - amount,
+            debt: remainingDebt,
             updatedAt: serverTimestamp()
         });
 
@@ -773,17 +808,15 @@ export async function recordCustomerPayment(data) {
         });
 
         return {
-            id: paymentRef.id,
-            remainingDebt: currentDebt - amount
+            id: paymentId,
+            remainingDebt
         };
     });
 }
 
-
 export async function getCustomerPayments() {
     return await getAll("payments");
 }
-
 
 // ======================================================
 // 13. ACHATS ET APPROVISIONNEMENTS
@@ -802,7 +835,6 @@ export async function createPurchase(data) {
     );
 
     return await runTransaction(db, async transaction => {
-
         const existing = await transaction.get(purchaseRef);
 
         if (existing.exists()) {
@@ -816,49 +848,38 @@ export async function createPurchase(data) {
         const grouped = new Map();
 
         for (const item of data.items) {
-            const id = item.productId;
-
-            if (!id) {
+            if (!item.productId) {
                 throw new Error("Produit non identifié.");
             }
 
-            const group = grouped.get(id) || {
-                productId: id,
+            const group = grouped.get(item.productId) || {
+                productId: item.productId,
                 quantity: 0,
                 purchasePrice: toNumber(
                     item.purchasePrice ?? item.costPrice
                 )
             };
 
-            // CORRECTION :
-            // Si quantity est fourni, il représente déjà
-            // le nombre de bouteilles.
-            // On ne le multiplie donc pas par unitsPerCrate.
-            //
-            // Sinon, on calcule les bouteilles à partir
-            // des casiers et des bouteilles supplémentaires.
-
-            let itemQuantity = 0;
+            let itemQuantity;
 
             if (item.quantity !== undefined) {
                 itemQuantity = toNumber(item.quantity);
             } else {
                 const crates = toNumber(item.crates);
-                const extraBottles = toNumber(
-                    item.extraBottles
-                );
+                const extra = toNumber(item.extraBottles);
 
                 const units = toNumber(
                     item.unitsPerCrate,
                     12
                 );
 
-                itemQuantity =
-                    crates * units +
-                    extraBottles;
+                itemQuantity = crates * units + extra;
             }
 
-            if (itemQuantity < 0) {
+            if (
+                !Number.isInteger(itemQuantity) ||
+                itemQuantity <= 0
+            ) {
                 throw new Error("Quantité d'achat invalide.");
             }
 
@@ -873,14 +894,14 @@ export async function createPurchase(data) {
                 );
             }
 
-            grouped.set(id, group);
+            grouped.set(item.productId, group);
         }
 
         const prepared = [];
 
         let total = 0;
 
-        // Lecture de tous les produits.
+        // Toutes les lectures des produits.
         for (const item of grouped.values()) {
             const productRef = getDocument(
                 "products",
@@ -894,15 +915,6 @@ export async function createPurchase(data) {
             }
 
             const product = snapshot.data();
-
-            const units = toNumber(
-                product.unitsPerCrate ?? product.units,
-                12
-            );
-
-            if (item.quantity <= 0) {
-                throw new Error("Quantité d'achat invalide.");
-            }
 
             const cost =
                 item.purchasePrice > 0
@@ -926,7 +938,6 @@ export async function createPurchase(data) {
                 productId: item.productId,
                 productName: product.name,
                 quantity: item.quantity,
-                units,
                 oldStock,
                 newStock,
                 purchasePrice: cost,
@@ -934,17 +945,17 @@ export async function createPurchase(data) {
             });
         }
 
+        if (total <= 0) {
+            throw new Error("Montant d'achat invalide.");
+        }
+
         const amountPaid = toNumber(
             data.amountPaid ?? total
         );
 
-        if (amountPaid < 0 || amountPaid > total) {
-            throw new Error("Montant payé invalide.");
-        }
+        const debt = calculateDebt(total, amountPaid);
 
         const supplierId = data.supplierId || null;
-
-        const debt = total - amountPaid;
 
         if (debt > 0 && !supplierId) {
             throw new Error(
@@ -972,7 +983,7 @@ export async function createPurchase(data) {
             supplier = supplierSnapshot.data();
         }
 
-        // ÉCRITURES : mise à jour des stocks.
+        // ÉCRITURES.
         for (const item of prepared) {
             transaction.update(item.productRef, {
                 totalBottles: item.newStock,
@@ -1010,6 +1021,7 @@ export async function createPurchase(data) {
             })),
 
             supplierId,
+
             supplierName:
                 data.supplierName ||
                 supplier?.name ||
@@ -1035,11 +1047,9 @@ export async function createPurchase(data) {
     });
 }
 
-
 export async function getPurchases() {
     return await getAll("purchases");
 }
-
 
 // ======================================================
 // 14. DÉPENSES
@@ -1060,14 +1070,12 @@ export async function addExpense(data) {
     });
 }
 
-
 export async function getExpenses() {
     return await getAll("expenses");
 }
 
-
 // ======================================================
-// 15. PERTES ET BOUTEILLES CASSÉES
+// 15. PERTES ET CASSES
 // ======================================================
 
 export async function recordLoss(data) {
@@ -1076,8 +1084,15 @@ export async function recordLoss(data) {
         "Quantité de perte invalide."
     );
 
-    return await runTransaction(db, async transaction => {
+    if (!Number.isInteger(quantity)) {
+        throw new Error("La quantité doit être un nombre entier.");
+    }
 
+    if (!data.productId) {
+        throw new Error("Produit non identifié.");
+    }
+
+    return await runTransaction(db, async transaction => {
         const productRef = getDocument(
             "products",
             data.productId
@@ -1099,9 +1114,7 @@ export async function recordLoss(data) {
 
         const newStock = oldStock - quantity;
 
-        const cost = toNumber(
-            product.purchasePrice
-        );
+        const cost = toNumber(product.purchasePrice);
 
         const lossRef = doc(getCollection("losses"));
 
@@ -1140,11 +1153,9 @@ export async function recordLoss(data) {
     });
 }
 
-
 export async function getLosses() {
     return await getAll("losses");
 }
-
 
 // ======================================================
 // 16. MOUVEMENTS DE STOCK
@@ -1153,7 +1164,6 @@ export async function getLosses() {
 export async function getStockMovements() {
     return await getAll("stockMovements");
 }
-
 
 // ======================================================
 // 17. VENTES PAR CLIENT
@@ -1167,13 +1177,11 @@ export async function getCustomerSales(customerId) {
     );
 }
 
-
 // ======================================================
 // 18. RÉSUMÉ FINANCIER
 // ======================================================
 
 export async function getFinancialSummary() {
-
     const [
         sales,
         expenses,
@@ -1183,7 +1191,6 @@ export async function getFinancialSummary() {
         customers,
         suppliers
     ] = await Promise.all([
-
         getSales(),
         getExpenses(),
         getLosses(),
@@ -1191,7 +1198,6 @@ export async function getFinancialSummary() {
         getProducts(),
         getCustomers(),
         getSuppliers()
-
     ]);
 
     const today = new Date().toDateString();
@@ -1201,8 +1207,10 @@ export async function getFinancialSummary() {
             ? item.date.toDate()
             : new Date(item.date);
 
-        return !isNaN(date.getTime()) &&
-            date.toDateString() === today;
+        return (
+            !isNaN(date.getTime()) &&
+            date.toDateString() === today
+        );
     }
 
     const todaySales = sales.filter(isToday);
@@ -1272,8 +1280,12 @@ export async function getFinancialSummary() {
         0
     );
 
-    return {
+    const totalStockBottles = products.reduce(
+        (sum, item) => sum + getStock(item),
+        0
+    );
 
+    return {
         totalSales,
         totalProfit,
         totalExpenses,
@@ -1295,25 +1307,17 @@ export async function getFinancialSummary() {
         totalSupplierDebt,
 
         stockValue,
-
         productCount: products.length,
-
-        totalStockBottles: products.reduce(
-            (sum, item) => sum + getStock(item),
-            0
-        )
+        totalStockBottles
     };
 }
 
-
 // ======================================================
-// 19. ANNULATION SÉCURISÉE D'UNE VENTE
+// 19. ANNULATION D'UNE VENTE NON ENCAISSÉE
 // ======================================================
 
 export async function deleteSale(saleId) {
-
     return await runTransaction(db, async transaction => {
-
         const saleRef = getDocument("sales", saleId);
 
         const saleSnapshot = await transaction.get(saleRef);
@@ -1331,27 +1335,21 @@ export async function deleteSale(saleId) {
             );
         }
 
-        const items = sale.items || [];
-
         const grouped = new Map();
 
-        for (const item of items) {
-            const id = item.productId;
+        for (const item of sale.items || []) {
+            const current = grouped.get(item.productId) || 0;
 
-            const current = grouped.get(id) || {
-                quantity: 0
-            };
-
-            current.quantity += toNumber(item.quantity);
-
-            grouped.set(id, current);
+            grouped.set(
+                item.productId,
+                current + toNumber(item.quantity)
+            );
         }
 
         const products = [];
 
-        // Toutes les lectures avant les écritures.
-        for (const [productId, item] of grouped) {
-
+        // Lecture des produits avant toute écriture.
+        for (const [productId, quantity] of grouped) {
             const productRef = getDocument(
                 "products",
                 productId
@@ -1368,7 +1366,7 @@ export async function deleteSale(saleId) {
             products.push({
                 productRef,
                 product: snapshot.data(),
-                quantity: item.quantity
+                quantity
             });
         }
 
@@ -1376,7 +1374,6 @@ export async function deleteSale(saleId) {
         let customer = null;
 
         if (sale.customerId) {
-
             customerRef = getDocument(
                 "customers",
                 sale.customerId
@@ -1394,13 +1391,12 @@ export async function deleteSale(saleId) {
             toNumber(customer.debt) < toNumber(sale.debt)
         ) {
             throw new Error(
-                "Cette dette a été modifiée ou partiellement réglée. " +
-                "Annulation automatique impossible."
+                "La dette a été modifiée. Annulation automatique impossible."
             );
         }
 
+        // Écritures.
         for (const item of products) {
-
             const oldStock = getStock(item.product);
 
             const newStock = oldStock + item.quantity;
@@ -1445,8 +1441,7 @@ export async function deleteSale(saleId) {
     });
 }
 
-
 // ======================================================
-// FIN DU MODULE DATABASE.JS
+// FIN DATABASE.JS
 // DÉPÔT SARAH V2
 // ======================================================
