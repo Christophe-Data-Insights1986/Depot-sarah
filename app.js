@@ -1,13 +1,13 @@
 // ======================================================
 // DÉPÔT SARAH V2
-// APP.JS — APPLICATION PRINCIPALE
+// APP.JS — VERSION HARMONISÉE
 // ======================================================
 
 // AUTHENTIFICATION
-import "./auth.js";
+import { ADMIN_EMAIL } from "./auth.js";
 
 // FIREBASE
-import { auth, db } from "./firebase.js";
+import { db } from "./firebase.js";
 
 import {
     collection,
@@ -22,7 +22,6 @@ import {
 import {
     addProduct,
     getProducts,
-    updateProduct,
     deleteProduct,
     createSale,
     getSales,
@@ -37,9 +36,7 @@ import {
     recordLoss,
     getLosses,
     recordCustomerPayment,
-    getFinancialSummary,
-    getCustomerPayments,
-    getStockMovements
+    getFinancialSummary
 } from "./database.js";
 
 // MODE HORS CONNEXION
@@ -58,8 +55,6 @@ import {
 // 1. VARIABLES GÉNÉRALES
 // ======================================================
 
-const ADMIN_EMAIL = "christopheatangana2@gmail.com";
-
 let currentUser = null;
 let currentIsAdmin = false;
 
@@ -72,6 +67,11 @@ let expenses = [];
 let losses = [];
 
 let loading = false;
+let formsInitialized = false;
+let navigationInitialized = false;
+let clickListenerInitialized = false;
+let connectionListenerInitialized = false;
+let managementFormsInitialized = false;
 
 const $ = id => document.getElementById(id);
 
@@ -81,23 +81,18 @@ const $ = id => document.getElementById(id);
 // ======================================================
 
 function money(value) {
-
     return new Intl.NumberFormat("fr-FR").format(
         Number(value || 0)
     ) + " FCFA";
-
 }
 
 
 function number(value) {
-
     return Number(value || 0);
-
 }
 
 
 function escapeHTML(value) {
-
     return String(value ?? "").replace(
         /[&<>"']/g,
         character => ({
@@ -108,19 +103,15 @@ function escapeHTML(value) {
             "'": "&#039;"
         })[character]
     );
-
 }
 
 
 function notify(message) {
-
     alert(message);
-
 }
 
 
 function dateFormat(value) {
-
     if (!value) return "Date inconnue";
 
     const date = value.toDate
@@ -132,37 +123,57 @@ function dateFormat(value) {
     }
 
     return date.toLocaleString("fr-FR");
-
 }
 
 
 function today() {
-
     return new Date().toDateString();
-
 }
 
 
 function isToday(item) {
-
     const date = item.date?.toDate
         ? item.date.toDate()
         : new Date(item.date);
 
     return !isNaN(date.getTime()) &&
         date.toDateString() === today();
-
 }
 
 
 function showSyncStatus(message) {
-
     const element = $("sync-status");
 
     if (element) {
         element.textContent = message;
     }
+}
 
+
+function createOperationId() {
+    if (crypto.randomUUID) {
+        return crypto.randomUUID();
+    }
+
+    return "sarah-" +
+        Date.now() +
+        "-" +
+        Math.random().toString(36).slice(2);
+}
+
+
+function isNetworkError(error) {
+    const networkCodes = [
+        "unavailable",
+        "network-request-failed",
+        "deadline-exceeded",
+        "webchannel-connection"
+    ];
+
+    return !isOnline() ||
+        networkCodes.some(code =>
+            String(error?.code || "").includes(code)
+        );
 }
 
 
@@ -172,6 +183,10 @@ function showSyncStatus(message) {
 
 function initializeNavigation() {
 
+    if (navigationInitialized) return;
+
+    navigationInitialized = true;
+
     document.querySelectorAll(".nav-button").forEach(button => {
 
         button.addEventListener("click", () => {
@@ -179,25 +194,19 @@ function initializeNavigation() {
             const page = button.dataset.page;
 
             document.querySelectorAll(".page").forEach(section => {
-
                 section.hidden = true;
                 section.classList.remove("active");
-
             });
 
             document.querySelectorAll(".nav-button").forEach(item => {
-
                 item.classList.remove("active");
-
             });
 
             const selectedPage = $(page);
 
             if (selectedPage) {
-
                 selectedPage.hidden = false;
                 selectedPage.classList.add("active");
-
             }
 
             button.classList.add("active");
@@ -212,9 +221,7 @@ function initializeNavigation() {
         button.addEventListener("click", () => {
 
             document.querySelectorAll(".management-section").forEach(section => {
-
                 section.hidden = true;
-
             });
 
             const section = $(button.dataset.section);
@@ -236,7 +243,7 @@ function initializeNavigation() {
 
 async function loadAllData() {
 
-    if (loading) return;
+    if (loading || !currentUser) return;
 
     loading = true;
 
@@ -256,25 +263,25 @@ async function loadAllData() {
 
         ]);
 
-        products = results[0];
-        customers = results[1];
-        sales = results[2];
-        suppliers = results[3];
-        purchases = results[4];
-        expenses = results[5];
-        losses = results[6];
+        products = results[0] || [];
+        customers = results[1] || [];
+        sales = results[2] || [];
+        suppliers = results[3] || [];
+        purchases = results[4] || [];
+        expenses = results[5] || [];
+        losses = results[6] || [];
 
         renderEverything();
 
         showSyncStatus(
             isOnline()
-                ? "Connecté — données synchronisées"
+                ? "Connecté — données actualisées"
                 : "Hors connexion"
         );
 
     } catch (error) {
 
-        console.error(error);
+        console.error("Erreur de chargement :", error);
 
         showSyncStatus("Erreur de chargement des données");
 
@@ -316,6 +323,8 @@ function renderEverything() {
     renderExpenses();
 
     renderLosses();
+
+    refreshManagementOptions();
 
     renderReports();
 
@@ -360,46 +369,59 @@ function renderDashboard() {
         0
     );
 
-    $("stat-products").textContent = products.length;
+    if ($("stat-products")) {
+        $("stat-products").textContent = products.length;
+    }
 
-    $("stat-stock").textContent = totalStock;
+    if ($("stat-stock")) {
+        $("stat-stock").textContent = totalStock;
+    }
 
-    $("stat-stock-cost").textContent = money(stockCost);
+    if ($("stat-stock-cost")) {
+        $("stat-stock-cost").textContent = money(stockCost);
+    }
 
-    $("stat-sales").textContent = money(dailySales);
+    if ($("stat-sales")) {
+        $("stat-sales").textContent = money(dailySales);
+    }
 
-    $("stat-profit").textContent = money(dailyProfit);
+    if ($("stat-profit")) {
+        $("stat-profit").textContent = money(dailyProfit);
+    }
 
-    $("stat-expenses").textContent = money(dailyExpenses);
+    if ($("stat-expenses")) {
+        $("stat-expenses").textContent = money(dailyExpenses);
+    }
 
-    $("stat-debts").textContent = money(debts);
-
+    if ($("stat-debts")) {
+        $("stat-debts").textContent = money(debts);
+    }
 
     const alerts = products.filter(product =>
-
         number(product.totalBottles) <=
         number(product.lowStockThreshold)
-
     );
 
-    $("low-stock-alerts").innerHTML = alerts.length
+    if ($("low-stock-alerts")) {
 
-        ? alerts.map(product => `
+        $("low-stock-alerts").innerHTML = alerts.length
 
-            <p>
-                ⚠️ ${escapeHTML(product.name)}
-                : ${number(product.totalBottles)} bouteilles restantes
-            </p>
+            ? alerts.map(product => `
+                <p>
+                    ⚠️ ${escapeHTML(product.name)}
+                    : ${number(product.totalBottles)} bouteilles restantes
+                </p>
+            `).join("")
 
-        `).join("")
+            : "Aucune alerte de stock faible.";
 
-        : "Aucune alerte de stock faible.";
+    }
 
 }
 
 
 // ======================================================
-// 7. GESTION DES PRODUITS
+// 7. PRODUITS
 // ======================================================
 
 async function handleProductForm(event) {
@@ -426,6 +448,11 @@ async function handleProductForm(event) {
 
         };
 
+        if (!data.name || data.unitsPerCrate <= 0) {
+            notify("Vérifie le nom et le nombre de bouteilles par casier.");
+            return;
+        }
+
         await addProduct(data);
 
         notify("Boisson enregistrée avec succès.");
@@ -433,9 +460,7 @@ async function handleProductForm(event) {
         event.target.reset();
 
         $("product-units").value = 12;
-
         $("product-quantity").value = 0;
-
         $("product-threshold").value = 12;
 
         await loadAllData();
@@ -516,6 +541,8 @@ function renderProductOptions() {
 
     if (!select) return;
 
+    const previousValue = select.value;
+
     select.innerHTML = `
         <option value="">Choisir une boisson</option>
     `;
@@ -523,17 +550,17 @@ function renderProductOptions() {
     products.forEach(product => {
 
         select.innerHTML += `
-
             <option value="${product.id}">
-
                 ${escapeHTML(product.name)}
                 — Stock : ${number(product.totalBottles)}
-
             </option>
-
         `;
 
     });
+
+    if (products.some(product => product.id === previousValue)) {
+        select.value = previousValue;
+    }
 
 }
 
@@ -548,9 +575,14 @@ async function adjustStock(productId) {
 
     if (!product) return;
 
+    if (!isOnline()) {
+        notify("L'ajustement manuel du stock nécessite une connexion Internet.");
+        return;
+    }
+
     const answer = prompt(
-        "Entrez la variation du stock en bouteilles.\n" +
-        "Exemple : 12 pour ajouter 12 bouteilles.\n" +
+        "Variation du stock en bouteilles.\n" +
+        "12 pour ajouter 12 bouteilles.\n" +
         "-3 pour retirer 3 bouteilles."
     );
 
@@ -559,11 +591,8 @@ async function adjustStock(productId) {
     const variation = Number(answer);
 
     if (!Number.isInteger(variation) || variation === 0) {
-
         notify("Quantité invalide.");
-
         return;
-
     }
 
     try {
@@ -582,7 +611,7 @@ async function adjustStock(productId) {
 
     } catch (error) {
 
-        notify(error.message);
+        notify(error.message || "Erreur d'ajustement.");
 
     }
 
@@ -596,11 +625,8 @@ async function adjustStock(productId) {
 async function removeProduct(productId) {
 
     if (!currentIsAdmin) {
-
         notify("Seul l'administrateur peut supprimer un produit.");
-
         return;
-
     }
 
     if (!confirm("Confirmer la suppression de cette boisson ?")) {
@@ -617,7 +643,7 @@ async function removeProduct(productId) {
 
     } catch (error) {
 
-        notify(error.message);
+        notify(error.message || "Erreur de suppression.");
 
     }
 
@@ -625,7 +651,7 @@ async function removeProduct(productId) {
 
 
 // ======================================================
-// 10. GESTION DES CLIENTS
+// 10. CLIENTS
 // ======================================================
 
 async function handleCustomerForm(event) {
@@ -650,7 +676,7 @@ async function handleCustomerForm(event) {
 
     } catch (error) {
 
-        notify(error.message);
+        notify(error.message || "Erreur d'enregistrement du client.");
 
     }
 
@@ -702,6 +728,8 @@ function renderCustomerOptions() {
 
     if (!select) return;
 
+    const previousValue = select.value;
+
     select.innerHTML = `
         <option value="">Client de passage</option>
     `;
@@ -709,16 +737,16 @@ function renderCustomerOptions() {
     customers.forEach(customer => {
 
         select.innerHTML += `
-
             <option value="${customer.id}">
-
                 ${escapeHTML(customer.name)}
-
             </option>
-
         `;
 
     });
+
+    if (customers.some(customer => customer.id === previousValue)) {
+        select.value = previousValue;
+    }
 
 }
 
@@ -742,11 +770,13 @@ async function payCustomer(customerId) {
     const amount = Number(answer);
 
     if (!Number.isFinite(amount) || amount <= 0) {
-
         notify("Montant invalide.");
-
         return;
+    }
 
+    if (amount > number(customer.debt)) {
+        notify("Le montant dépasse la dette du client.");
+        return;
     }
 
     const method = prompt(
@@ -754,9 +784,16 @@ async function payCustomer(customerId) {
         "Espèces"
     );
 
-    if (method === null) return;
+    if (method === null || !method.trim()) return;
+
+    const operationId = createOperationId();
 
     try {
+
+        if (!isOnline()) {
+            notify("Le paiement d'une dette nécessite une connexion Internet.");
+            return;
+        }
 
         await recordCustomerPayment({
 
@@ -764,7 +801,9 @@ async function payCustomer(customerId) {
 
             amount,
 
-            method
+            method: method.trim(),
+
+            operationId
 
         });
 
@@ -774,7 +813,9 @@ async function payCustomer(customerId) {
 
     } catch (error) {
 
-        notify(error.message);
+        console.error(error);
+
+        notify(error.message || "Erreur lors du paiement.");
 
     }
 
@@ -782,7 +823,7 @@ async function payCustomer(customerId) {
 
 
 // ======================================================
-// 12. GESTION DES VENTES
+// 12. VENTES
 // ======================================================
 
 async function handleSaleForm(event) {
@@ -794,23 +835,23 @@ async function handleSaleForm(event) {
     const product = products.find(item => item.id === productId);
 
     if (!product) {
-
         notify("Sélectionne une boisson.");
-
         return;
-
     }
 
     const crates = number($("sale-crates").value);
 
     const extraBottles = number($("sale-bottles").value);
 
-    if (crates <= 0 && extraBottles <= 0) {
-
-        notify("Entre une quantité à vendre.");
-
+    if (
+        !Number.isInteger(crates) ||
+        !Number.isInteger(extraBottles) ||
+        crates < 0 ||
+        extraBottles < 0 ||
+        (crates === 0 && extraBottles === 0)
+    ) {
+        notify("Vérifie les quantités à vendre.");
         return;
-
     }
 
     const quantity =
@@ -818,11 +859,8 @@ async function handleSaleForm(event) {
         extraBottles;
 
     if (quantity > number(product.totalBottles)) {
-
         notify("Stock insuffisant.");
-
         return;
-
     }
 
     const customerId = $("sale-customer").value || null;
@@ -837,24 +875,24 @@ async function handleSaleForm(event) {
 
     const bottlePriceInput = $("sale-bottle-price").value;
 
-    const cratePrice = cratePriceInput === ""
-        ? number(product.cratePrice)
-        : number(cratePriceInput);
-
     const bottlePrice = bottlePriceInput === ""
         ? number(product.sellingPrice)
         : number(bottlePriceInput);
+
+    const defaultCratePrice = number(product.cratePrice) ||
+        bottlePrice * number(product.unitsPerCrate);
+
+    const cratePrice = cratePriceInput === ""
+        ? defaultCratePrice
+        : number(cratePriceInput);
 
     const total =
         crates * cratePrice +
         extraBottles * bottlePrice;
 
     if (total <= 0) {
-
         notify("Le montant de la vente est invalide.");
-
         return;
-
     }
 
     let amountPaid;
@@ -874,20 +912,16 @@ async function handleSaleForm(event) {
     }
 
     if (amountPaid < 0 || amountPaid > total) {
-
         notify("Montant payé invalide.");
-
         return;
-
     }
 
     if (amountPaid < total && !customerId) {
-
         notify("Sélectionne un client pour enregistrer une dette.");
-
         return;
-
     }
+
+    const operationId = createOperationId();
 
     const saleData = {
 
@@ -913,23 +947,26 @@ async function handleSaleForm(event) {
 
         paymentMethod: paymentMode,
 
-        amountPaid
+        amountPaid,
+
+        operationId
 
     };
-
 
     try {
 
         if (!isOnline()) {
 
-            const operationId = await enqueueOperation(
+            await enqueueOperation(
                 "createSale",
-                saleData
+                saleData,
+                operationId,
+                currentUser.uid
             );
 
             notify(
                 "Vente conservée sur ce téléphone. " +
-                "Elle sera envoyée à Firebase dès le retour d'Internet.\n" +
+                "Elle sera synchronisée au retour d'Internet.\n" +
                 "Référence : " + operationId
             );
 
@@ -940,7 +977,6 @@ async function handleSaleForm(event) {
             return;
 
         }
-
 
         await createSale(saleData);
 
@@ -953,6 +989,40 @@ async function handleSaleForm(event) {
     } catch (error) {
 
         console.error(error);
+
+        if (isNetworkError(error)) {
+
+            try {
+
+                await enqueueOperation(
+                    "createSale",
+                    saleData,
+                    operationId,
+                    currentUser.uid
+                );
+
+                notify(
+                    "Connexion interrompue. La vente a été mise en attente.\n" +
+                    "Référence : " + operationId
+                );
+
+                event.target.reset();
+
+                await updateSyncStatus();
+
+                return;
+
+            } catch (queueError) {
+
+                console.error(queueError);
+
+                notify("Impossible de conserver la vente sur ce téléphone.");
+
+                return;
+
+            }
+
+        }
 
         notify(error.message || "Impossible d'enregistrer la vente.");
 
@@ -972,18 +1042,23 @@ function renderSales() {
     if (!container) return;
 
     if (!sales.length) {
-
         container.textContent = "Aucune vente enregistrée.";
-
         return;
-
     }
 
-    const ordered = [...sales].sort((a, b) =>
+    const ordered = [...sales].sort((a, b) => {
 
-        new Date(b.date) - new Date(a.date)
+        const dateA = a.date?.toDate
+            ? a.date.toDate()
+            : new Date(a.date);
 
-    );
+        const dateB = b.date?.toDate
+            ? b.date.toDate()
+            : new Date(b.date);
+
+        return dateB - dateA;
+
+    });
 
     container.innerHTML = ordered.map(sale => `
 
@@ -1152,132 +1227,148 @@ function renderLosses() {
 
 function createManagementForms() {
 
-    // FOURNISSEURS
+    if (managementFormsInitialized) return;
 
-    $("suppliers-section").insertAdjacentHTML(
-        "afterbegin",
-        `
-        <form id="supplier-form">
+    managementFormsInitialized = true;
 
-            <h4>Ajouter un fournisseur</h4>
+    const suppliersSection = $("suppliers-section");
+    const purchasesSection = $("purchases-section");
+    const expensesSection = $("expenses-section");
+    const lossesSection = $("losses-section");
 
-            <input id="supplier-name"
-                placeholder="Nom du fournisseur"
-                required>
+    if (suppliersSection && !$("supplier-form")) {
 
-            <input id="supplier-phone"
-                placeholder="Téléphone">
+        suppliersSection.insertAdjacentHTML(
+            "afterbegin",
+            `
+            <form id="supplier-form">
 
-            <button>Enregistrer</button>
+                <h4>Ajouter un fournisseur</h4>
 
-        </form>
-        `
-    );
+                <input id="supplier-name"
+                    placeholder="Nom du fournisseur"
+                    required>
 
+                <input id="supplier-phone"
+                    placeholder="Téléphone">
 
-    // APPROVISIONNEMENTS
+                <button>Enregistrer</button>
 
-    $("purchases-section").insertAdjacentHTML(
-        "afterbegin",
-        `
-        <form id="purchase-form">
+            </form>
+            `
+        );
 
-            <h4>Nouvel approvisionnement</h4>
-
-            <label>Boisson</label>
-
-            <select id="purchase-product" required></select>
-
-            <label>Nombre de casiers</label>
-
-            <input id="purchase-crates"
-                type="number" min="0" value="0">
-
-            <label>Bouteilles supplémentaires</label>
-
-            <input id="purchase-bottles"
-                type="number" min="0" value="0">
-
-            <label>Prix d'achat par bouteille</label>
-
-            <input id="purchase-cost"
-                type="number" min="0" required>
-
-            <label>Montant payé</label>
-
-            <input id="purchase-paid"
-                type="number" min="0" value="0">
-
-            <label>Fournisseur</label>
-
-            <select id="purchase-supplier">
-                <option value="">Aucun fournisseur</option>
-            </select>
-
-            <button>Enregistrer l'achat</button>
-
-        </form>
-        `
-    );
+    }
 
 
-    // DÉPENSES
+    if (purchasesSection && !$("purchase-form")) {
 
-    $("expenses-section").insertAdjacentHTML(
-        "afterbegin",
-        `
-        <form id="expense-form">
+        purchasesSection.insertAdjacentHTML(
+            "afterbegin",
+            `
+            <form id="purchase-form">
 
-            <h4>Nouvelle dépense</h4>
+                <h4>Nouvel approvisionnement</h4>
 
-            <input id="expense-title"
-                placeholder="Nom de la dépense"
-                required>
+                <label>Boisson</label>
 
-            <input id="expense-category"
-                placeholder="Catégorie">
+                <select id="purchase-product" required></select>
 
-            <input id="expense-amount"
-                type="number" min="1"
-                placeholder="Montant FCFA"
-                required>
+                <label>Nombre de casiers</label>
 
-            <textarea id="expense-description"
-                placeholder="Description"></textarea>
+                <input id="purchase-crates"
+                    type="number" min="0" value="0">
 
-            <button>Enregistrer la dépense</button>
+                <label>Bouteilles supplémentaires</label>
 
-        </form>
-        `
-    );
+                <input id="purchase-bottles"
+                    type="number" min="0" value="0">
+
+                <label>Prix d'achat par bouteille</label>
+
+                <input id="purchase-cost"
+                    type="number" min="1" required>
+
+                <label>Montant payé</label>
+
+                <input id="purchase-paid"
+                    type="number" min="0" value="0">
+
+                <label>Fournisseur</label>
+
+                <select id="purchase-supplier">
+                    <option value="">Aucun fournisseur</option>
+                </select>
+
+                <button>Enregistrer l'achat</button>
+
+            </form>
+            `
+        );
+
+    }
 
 
-    // PERTES
+    if (expensesSection && !$("expense-form")) {
 
-    $("losses-section").insertAdjacentHTML(
-        "afterbegin",
-        `
-        <form id="loss-form">
+        expensesSection.insertAdjacentHTML(
+            "afterbegin",
+            `
+            <form id="expense-form">
 
-            <h4>Enregistrer une perte</h4>
+                <h4>Nouvelle dépense</h4>
 
-            <select id="loss-product" required></select>
+                <input id="expense-title"
+                    placeholder="Nom de la dépense"
+                    required>
 
-            <input id="loss-quantity"
-                type="number" min="1"
-                placeholder="Nombre de bouteilles"
-                required>
+                <input id="expense-category"
+                    placeholder="Catégorie">
 
-            <input id="loss-reason"
-                placeholder="Motif : casse, perte..."
-                required>
+                <input id="expense-amount"
+                    type="number" min="1"
+                    placeholder="Montant FCFA"
+                    required>
 
-            <button>Enregistrer la perte</button>
+                <textarea id="expense-description"
+                    placeholder="Description"></textarea>
 
-        </form>
-        `
-    );
+                <button>Enregistrer la dépense</button>
 
+            </form>
+            `
+        );
+
+    }
+
+
+    if (lossesSection && !$("loss-form")) {
+
+        lossesSection.insertAdjacentHTML(
+            "afterbegin",
+            `
+            <form id="loss-form">
+
+                <h4>Enregistrer une perte</h4>
+
+                <select id="loss-product" required></select>
+
+                <input id="loss-quantity"
+                    type="number" min="1"
+                    placeholder="Nombre de bouteilles"
+                    required>
+
+                <input id="loss-reason"
+                    placeholder="Motif : casse, perte..."
+                    required>
+
+                <button>Enregistrer la perte</button>
+
+            </form>
+            `
+        );
+
+    }
 
     refreshManagementOptions();
 
@@ -1287,39 +1378,46 @@ function createManagementForms() {
 function refreshManagementOptions() {
 
     const productSelect = $("purchase-product");
-
     const supplierSelect = $("purchase-supplier");
-
     const lossSelect = $("loss-product");
-
 
     if (productSelect) {
 
-        productSelect.innerHTML = products.map(product => `
+        const previous = productSelect.value;
 
+        productSelect.innerHTML = products.map(product => `
             <option value="${product.id}">
                 ${escapeHTML(product.name)}
             </option>
-
         `).join("");
+
+        if (products.some(item => item.id === previous)) {
+            productSelect.value = previous;
+        }
 
     }
 
 
     if (lossSelect) {
 
-        lossSelect.innerHTML = products.map(product => `
+        const previous = lossSelect.value;
 
+        lossSelect.innerHTML = products.map(product => `
             <option value="${product.id}">
                 ${escapeHTML(product.name)}
             </option>
-
         `).join("");
+
+        if (products.some(item => item.id === previous)) {
+            lossSelect.value = previous;
+        }
 
     }
 
 
     if (supplierSelect) {
+
+        const previous = supplierSelect.value;
 
         supplierSelect.innerHTML = `
             <option value="">Aucun fournisseur</option>
@@ -1328,14 +1426,16 @@ function refreshManagementOptions() {
         suppliers.forEach(supplier => {
 
             supplierSelect.innerHTML += `
-
                 <option value="${supplier.id}">
                     ${escapeHTML(supplier.name)}
                 </option>
-
             `;
 
         });
+
+        if (suppliers.some(item => item.id === previous)) {
+            supplierSelect.value = previous;
+        }
 
     }
 
@@ -1368,7 +1468,7 @@ async function handleSupplierForm(event) {
 
     } catch (error) {
 
-        notify(error.message);
+        notify(error.message || "Erreur fournisseur.");
 
     }
 
@@ -1388,11 +1488,8 @@ async function handlePurchaseForm(event) {
     const product = products.find(item => item.id === productId);
 
     if (!product) {
-
         notify("Produit introuvable.");
-
         return;
-
     }
 
     const crates = number($("purchase-crates").value);
@@ -1401,61 +1498,86 @@ async function handlePurchaseForm(event) {
 
     const purchasePrice = number($("purchase-cost").value);
 
+    if (
+        !Number.isInteger(crates) ||
+        !Number.isInteger(extraBottles) ||
+        crates < 0 ||
+        extraBottles < 0
+    ) {
+        notify("Quantités invalides.");
+        return;
+    }
+
     const quantity =
         crates * number(product.unitsPerCrate) +
         extraBottles;
 
     if (quantity <= 0 || purchasePrice <= 0) {
-
         notify("Vérifie les quantités et le prix d'achat.");
-
         return;
-
     }
 
     const total = quantity * purchasePrice;
 
-    let amountPaid = $("purchase-paid").value === ""
+    const amountPaid = $("purchase-paid").value === ""
         ? total
         : number($("purchase-paid").value);
 
-    if (amountPaid > total) {
-
-        notify("Le paiement dépasse le montant de l'achat.");
-
+    if (amountPaid < 0 || amountPaid > total) {
+        notify("Montant payé invalide.");
         return;
-
     }
 
     const supplierId = $("purchase-supplier").value || null;
 
     if (amountPaid < total && !supplierId) {
-
         notify("Sélectionne un fournisseur pour enregistrer une dette.");
-
         return;
-
     }
+
+    const operationId = createOperationId();
+
+    const purchaseData = {
+
+        items: [{
+            productId,
+            quantity,
+            purchasePrice
+        }],
+
+        supplierId,
+
+        amountPaid,
+
+        operationId
+
+    };
 
     try {
 
-        await createPurchase({
+        if (!isOnline()) {
 
-            items: [{
+            await enqueueOperation(
+                "createPurchase",
+                purchaseData,
+                operationId,
+                currentUser.uid
+            );
 
-                productId,
+            notify(
+                "Approvisionnement conservé sur ce téléphone. " +
+                "Il sera synchronisé au retour d'Internet."
+            );
 
-                quantity,
+            event.target.reset();
 
-                purchasePrice
+            await updateSyncStatus();
 
-            }],
+            return;
 
-            supplierId,
+        }
 
-            amountPaid
-
-        });
+        await createPurchase(purchaseData);
 
         notify("Approvisionnement enregistré.");
 
@@ -1465,7 +1587,40 @@ async function handlePurchaseForm(event) {
 
     } catch (error) {
 
-        notify(error.message);
+        console.error(error);
+
+        if (isNetworkError(error)) {
+
+            try {
+
+                await enqueueOperation(
+                    "createPurchase",
+                    purchaseData,
+                    operationId,
+                    currentUser.uid
+                );
+
+                notify("Approvisionnement mis en attente de synchronisation.");
+
+                event.target.reset();
+
+                await updateSyncStatus();
+
+                return;
+
+            } catch (queueError) {
+
+                console.error(queueError);
+
+                notify("Impossible de conserver cet achat localement.");
+
+                return;
+
+            }
+
+        }
+
+        notify(error.message || "Erreur lors de l'approvisionnement.");
 
     }
 
@@ -1479,6 +1634,11 @@ async function handlePurchaseForm(event) {
 async function handleExpenseForm(event) {
 
     event.preventDefault();
+
+    if (!isOnline()) {
+        notify("Une connexion Internet est nécessaire pour enregistrer une dépense.");
+        return;
+    }
 
     try {
 
@@ -1502,7 +1662,7 @@ async function handleExpenseForm(event) {
 
     } catch (error) {
 
-        notify(error.message);
+        notify(error.message || "Erreur lors de la dépense.");
 
     }
 
@@ -1516,6 +1676,11 @@ async function handleExpenseForm(event) {
 async function handleLossForm(event) {
 
     event.preventDefault();
+
+    if (!isOnline()) {
+        notify("Une connexion Internet est nécessaire pour enregistrer une perte.");
+        return;
+    }
 
     try {
 
@@ -1537,7 +1702,7 @@ async function handleLossForm(event) {
 
     } catch (error) {
 
-        notify(error.message);
+        notify(error.message || "Erreur lors de la perte.");
 
     }
 
@@ -1552,7 +1717,7 @@ async function renderReports() {
 
     const container = $("reports-content");
 
-    if (!container) return;
+    if (!container || !currentUser) return;
 
     try {
 
@@ -1582,13 +1747,13 @@ async function renderReports() {
 
             <p>Valeur du stock : ${money(summary.stockValue)}</p>
 
-            <p>Total bouteilles : ${summary.totalStockBottles}</p>
+            <p>Total bouteilles : ${number(summary.totalStockBottles)}</p>
 
         `;
 
     } catch (error) {
 
-        console.error(error);
+        console.error("Erreur rapports :", error);
 
         container.textContent = "Impossible de charger les rapports.";
 
@@ -1616,6 +1781,11 @@ function renderUsers() {
 
     }
 
+    // Ne pas recréer le contenu à chaque actualisation.
+    // Cela évite d'effacer les demandes déjà chargées.
+
+    if ($("user-requests-list")) return;
+
     container.innerHTML = `
 
         <h4>Administration des accès</h4>
@@ -1625,8 +1795,8 @@ function renderUsers() {
         <strong>${ADMIN_EMAIL}</strong>
 
         <p>
-            Les demandes d'accès et les autorisations seront
-            gérées depuis cette section.
+            Les demandes d'accès et les autorisations
+            sont gérées depuis cette section.
         </p>
 
         <button id="refresh-users">
@@ -1661,11 +1831,8 @@ async function loadUserRequests() {
         );
 
         const requests = snapshot.docs.map(item => ({
-
             id: item.id,
-
             ...item.data()
-
         }));
 
         const pending = requests.filter(item =>
@@ -1713,7 +1880,7 @@ async function loadUserRequests() {
 
 
 // ======================================================
-// 26. APPROBATION D'UN UTILISATEUR
+// 26. APPROBATION UTILISATEUR
 // ======================================================
 
 async function approveUser(uid) {
@@ -1725,15 +1892,11 @@ async function approveUser(uid) {
         await setDoc(
             doc(db, "authorizedUsers", uid),
             {
-
                 approved: true,
-
+                status: "approved",
                 role: "user",
-
                 approvedBy: currentUser.email,
-
                 approvedAt: serverTimestamp()
-
             },
             { merge: true }
         );
@@ -1741,11 +1904,8 @@ async function approveUser(uid) {
         await updateDoc(
             doc(db, "userRequests", uid),
             {
-
                 status: "approved",
-
                 approvedAt: serverTimestamp()
-
             }
         );
 
@@ -1767,7 +1927,7 @@ async function approveUser(uid) {
 
 
 // ======================================================
-// 27. REFUS D'UN UTILISATEUR
+// 27. REFUS UTILISATEUR
 // ======================================================
 
 async function denyUser(uid) {
@@ -1781,11 +1941,8 @@ async function denyUser(uid) {
         await updateDoc(
             doc(db, "userRequests", uid),
             {
-
                 status: "rejected",
-
                 rejectedAt: serverTimestamp()
-
             }
         );
 
@@ -1795,7 +1952,7 @@ async function denyUser(uid) {
 
     } catch (error) {
 
-        notify(error.message);
+        notify(error.message || "Erreur lors du refus.");
 
     }
 
@@ -1835,7 +1992,7 @@ async function processOfflineOperation(operation) {
         default:
 
             throw new Error(
-                "Type d'opération hors connexion non reconnu : " +
+                "Opération hors connexion non reconnue : " +
                 operation.type
             );
 
@@ -1845,6 +2002,8 @@ async function processOfflineOperation(operation) {
 
 
 async function synchronizeOfflineData() {
+
+    if (!currentUser) return;
 
     if (!isOnline()) {
 
@@ -1859,7 +2018,8 @@ async function synchronizeOfflineData() {
         showSyncStatus("Synchronisation en cours...");
 
         const result = await syncPendingOperations(
-            processOfflineOperation
+            processOfflineOperation,
+            currentUser.uid
         );
 
         await updateSyncStatus();
@@ -1868,11 +2028,24 @@ async function synchronizeOfflineData() {
 
             await loadAllData();
 
+            notify(
+                result.completed +
+                " opération(s) synchronisée(s) avec succès."
+            );
+
+        }
+
+        if (result.failed > 0) {
+
+            console.warn(
+                result.failed + " opération(s) en échec."
+            );
+
         }
 
     } catch (error) {
 
-        console.error(error);
+        console.error("Erreur synchronisation :", error);
 
         showSyncStatus("Erreur de synchronisation");
 
@@ -1883,32 +2056,41 @@ async function synchronizeOfflineData() {
 
 async function updateSyncStatus() {
 
-    const pending = await countPendingOperations();
+    if (!currentUser) return;
 
-    const failed = await countFailedOperations();
+    try {
 
-    if (!isOnline()) {
+        const pending = await countPendingOperations(currentUser.uid);
+
+        const failed = await countFailedOperations(currentUser.uid);
+
+        if (!isOnline()) {
+
+            showSyncStatus(
+                `Hors connexion — ${pending} opération(s) en attente`
+            );
+
+            return;
+
+        }
 
         showSyncStatus(
-            `Hors connexion — ${pending} opération(s) en attente`
+            `${pending} opération(s) en attente — ${failed} échec(s)`
         );
 
-        return;
+    } catch (error) {
+
+        console.error(error);
+
+        showSyncStatus("Impossible de vérifier la synchronisation.");
 
     }
-
-    showSyncStatus(
-
-        `${pending} opération(s) en attente — ` +
-        `${failed} échec(s)`
-
-    );
 
 }
 
 
 // ======================================================
-// 29. SAUVEGARDE DES DONNÉES
+// 29. SAUVEGARDE
 // ======================================================
 
 async function exportBackup() {
@@ -1936,11 +2118,8 @@ async function exportBackup() {
         };
 
         const blob = new Blob(
-
             [JSON.stringify(data, null, 2)],
-
             { type: "application/json" }
-
         );
 
         const url = URL.createObjectURL(blob);
@@ -1950,17 +2129,23 @@ async function exportBackup() {
         link.href = url;
 
         link.download =
-            "sarah-stock-sauvegarde-" +
+            "depot-sarah-sauvegarde-" +
             new Date().toISOString().slice(0, 10) +
             ".json";
 
+        document.body.appendChild(link);
+
         link.click();
+
+        link.remove();
 
         URL.revokeObjectURL(url);
 
         notify("Sauvegarde téléchargée.");
 
     } catch (error) {
+
+        console.error(error);
 
         notify("Erreur lors de la sauvegarde.");
 
@@ -1989,10 +2174,14 @@ function initializeBackup() {
 
 
 // ======================================================
-// 30. ÉCOUTE DES ACTIONS
+// 30. FORMULAIRES ET ACTIONS
 // ======================================================
 
 function initializeForms() {
+
+    if (formsInitialized) return;
+
+    formsInitialized = true;
 
     $("product-form")?.addEventListener(
         "submit",
@@ -2030,103 +2219,81 @@ function initializeForms() {
     );
 
 
-    $("logout-button")?.addEventListener("click", async () => {
+    // Préremplissage des prix lors du choix d'une boisson.
 
-        const { signOut } = await import(
-            "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js"
+    $("sale-product")?.addEventListener("change", () => {
+
+        const product = products.find(
+            item => item.id === $("sale-product").value
         );
 
-        await signOut(auth);
+        if (!product) return;
+
+        if ($("sale-bottle-price")) {
+            $("sale-bottle-price").value =
+                number(product.sellingPrice);
+        }
+
+        if ($("sale-crate-price")) {
+            $("sale-crate-price").value =
+                number(product.cratePrice) ||
+                number(product.sellingPrice) *
+                number(product.unitsPerCrate);
+        }
 
     });
 
 
+    if (clickListenerInitialized) return;
+
+    clickListenerInitialized = true;
+
     document.addEventListener("click", async event => {
 
-        const stockButton = event.target.closest("[data-stock]");
+        const target = event.target;
+
+        const stockButton = target.closest("[data-stock]");
 
         if (stockButton) {
-
             await adjustStock(stockButton.dataset.stock);
-
             return;
-
         }
 
-
-        const deleteButton = event.target.closest(
-            "[data-delete-product]"
-        );
+        const deleteButton = target.closest("[data-delete-product]");
 
         if (deleteButton) {
-
-            await removeProduct(
-                deleteButton.dataset.deleteProduct
-            );
-
+            await removeProduct(deleteButton.dataset.deleteProduct);
             return;
-
         }
 
-
-        const paymentButton = event.target.closest(
-            "[data-pay-customer]"
-        );
+        const paymentButton = target.closest("[data-pay-customer]");
 
         if (paymentButton) {
-
-            await payCustomer(
-                paymentButton.dataset.payCustomer
-            );
-
+            await payCustomer(paymentButton.dataset.payCustomer);
             return;
-
         }
 
-
-        const approveButton = event.target.closest(
-            "[data-approve-user]"
-        );
+        const approveButton = target.closest("[data-approve-user]");
 
         if (approveButton) {
-
-            await approveUser(
-                approveButton.dataset.approveUser
-            );
-
+            await approveUser(approveButton.dataset.approveUser);
             return;
-
         }
 
-
-        const denyButton = event.target.closest(
-            "[data-deny-user]"
-        );
+        const denyButton = target.closest("[data-deny-user]");
 
         if (denyButton) {
-
-            await denyUser(
-                denyButton.dataset.denyUser
-            );
-
+            await denyUser(denyButton.dataset.denyUser);
             return;
-
         }
 
-
-        if (event.target.id === "refresh-users") {
-
+        if (target.id === "refresh-users") {
             await loadUserRequests();
-
             return;
-
         }
 
-
-        if (event.target.id === "export-backup") {
-
+        if (target.id === "export-backup") {
             await exportBackup();
-
         }
 
     });
@@ -2135,7 +2302,7 @@ function initializeForms() {
 
 
 // ======================================================
-// 31. INITIALISATION APRÈS CONNEXION
+// 31. INITIALISATION DE L'APPLICATION
 // ======================================================
 
 async function initializeApplication(user, isAdmin) {
@@ -2146,8 +2313,13 @@ async function initializeApplication(user, isAdmin) {
 
     currentIsAdmin = Boolean(isAdmin);
 
-    $("current-user").textContent =
-        user.displayName || user.email;
+    if ($("current-user")) {
+
+        $("current-user").textContent =
+            `${user.displayName || user.email}` +
+            (currentIsAdmin ? " (Administrateur)" : "");
+
+    }
 
     initializeNavigation();
 
@@ -2164,28 +2336,41 @@ async function initializeApplication(user, isAdmin) {
     await updateSyncStatus();
 
     if (currentIsAdmin) {
-
         await loadUserRequests();
-
     }
 
     await synchronizeOfflineData();
 
-    listenToConnection(async online => {
 
-        if (online) {
+    // Un seul écouteur de connexion pour toute l'application.
 
-            showSyncStatus("Connexion rétablie — synchronisation...");
+    if (!connectionListenerInitialized) {
 
-            await synchronizeOfflineData();
+        connectionListenerInitialized = true;
 
-        } else {
+        listenToConnection(async online => {
 
-            showSyncStatus("Hors connexion — données locales conservées");
+            if (!currentUser) return;
 
-        }
+            if (online) {
 
-    });
+                showSyncStatus(
+                    "Connexion rétablie — synchronisation..."
+                );
+
+                await synchronizeOfflineData();
+
+            } else {
+
+                showSyncStatus(
+                    "Hors connexion — opérations conservées sur ce téléphone."
+                );
+
+            }
+
+        });
+
+    }
 
     console.log(
         "DÉPÔT SARAH V2 initialisé.",
@@ -2196,7 +2381,32 @@ async function initializeApplication(user, isAdmin) {
 
 
 // ======================================================
-// 32. RÉCEPTION DE L'ÉVÉNEMENT D'AUTHENTIFICATION
+// 32. GESTION DE LA DÉCONNEXION
+// ======================================================
+
+window.addEventListener("sarah-auth-logged-out", () => {
+
+    currentUser = null;
+
+    currentIsAdmin = false;
+
+    products = [];
+    customers = [];
+    sales = [];
+    suppliers = [];
+    purchases = [];
+    expenses = [];
+    losses = [];
+
+    loading = false;
+
+    showSyncStatus("Déconnecté.");
+
+});
+
+
+// ======================================================
+// 33. RÉCEPTION DE L'AUTHENTIFICATION
 // ======================================================
 
 window.addEventListener(
@@ -2212,12 +2422,13 @@ window.addEventListener(
         } catch (error) {
 
             console.error(
-                "Erreur d'initialisation de l'application :",
+                "Erreur d'initialisation :",
                 error
             );
 
             notify(
-                "Erreur lors du démarrage de l'application."
+                "Erreur au démarrage de l'application. " +
+                "Vérifie les fichiers Firebase et la connexion Internet."
             );
 
         }
@@ -2227,5 +2438,5 @@ window.addEventListener(
 
 
 // ======================================================
-// 33. FIN APP.JS
+// FIN APP.JS — DÉPÔT SARAH V2
 // ======================================================
