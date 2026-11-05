@@ -1,86 +1,58 @@
-// ==================================================
+// ======================================================
 // DÉPÔT SARAH V2
-// SERVICE WORKER - CACHE ET MODE HORS LIGNE
-// ==================================================
+// SERVICE WORKER
+// ======================================================
 
-const CACHE_NAME = "depot-sarah-v2-cache-1";
+const CACHE_NAME = "depot-sarah-v2-cache-2";
 
 const APP_FILES = [
     "./",
     "./index.html",
     "./style.css",
     "./app.js",
+    "./auth.js",
     "./firebase.js",
     "./database.js",
     "./offline.js",
     "./manifest.json"
 ];
 
-
-// ==================================================
 // INSTALLATION
-// ==================================================
-
 self.addEventListener("install", event => {
-
     event.waitUntil(
-
-        caches.open(CACHE_NAME).then(cache => {
-
-            return cache.addAll(APP_FILES);
-
-        })
-
+        caches.open(CACHE_NAME)
+            .then(cache => cache.addAll(APP_FILES))
     );
 
     self.skipWaiting();
 });
 
-
-// ==================================================
 // ACTIVATION
-// ==================================================
-
 self.addEventListener("activate", event => {
-
     event.waitUntil(
-
-        caches.keys().then(cacheNames => {
-
-            return Promise.all(
-
+        caches.keys().then(cacheNames =>
+            Promise.all(
                 cacheNames
                     .filter(name =>
                         name.startsWith("depot-sarah-v2-cache-") &&
                         name !== CACHE_NAME
                     )
                     .map(name => caches.delete(name))
-
-            );
-
-        })
-
+            )
+        ).then(() => self.clients.claim())
     );
-
-    self.clients.claim();
 });
 
-
-// ==================================================
 // GESTION DES REQUÊTES
-// ==================================================
-
 self.addEventListener("fetch", event => {
 
     const request = event.request;
 
-    if (request.method !== "GET") {
-        return;
-    }
+    if (request.method !== "GET") return;
 
     const url = new URL(request.url);
 
-    // Ne jamais mettre en cache les appels Firebase.
+    // Ne pas intercepter les services Firebase et Google
     if (
         url.hostname.includes("firebase") ||
         url.hostname.includes("googleapis.com") ||
@@ -99,12 +71,10 @@ self.addEventListener("fetch", event => {
                     response.status === 200 &&
                     url.origin === self.location.origin
                 ) {
+                    const copy = response.clone();
 
-                    const responseCopy = response.clone();
-
-                    caches.open(CACHE_NAME).then(cache => {
-                        cache.put(request, responseCopy);
-                    });
+                    caches.open(CACHE_NAME)
+                        .then(cache => cache.put(request, copy));
                 }
 
                 return response;
@@ -112,15 +82,11 @@ self.addEventListener("fetch", event => {
 
             .catch(async () => {
 
-                const cachedResponse =
-                    await caches.match(request);
+                const cached = await caches.match(request);
 
-                if (cachedResponse) {
-                    return cachedResponse;
-                }
+                if (cached) return cached;
 
                 if (request.mode === "navigate") {
-
                     return caches.match("./index.html");
                 }
 
@@ -134,11 +100,5 @@ self.addEventListener("fetch", event => {
                     }
                 );
             })
-
     );
 });
-
-
-// ==================================================
-// FIN DU SERVICE WORKER
-// ==================================================
