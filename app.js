@@ -1,6 +1,6 @@
 // ======================================================
 // DÉPÔT SARAH V2
-// APP.JS — VERSION HARMONISÉE
+// APP.JS — VERSION CORRIGÉE
 // ======================================================
 
 // AUTHENTIFICATION
@@ -86,11 +86,9 @@ function money(value) {
     ) + " FCFA";
 }
 
-
 function number(value) {
     return Number(value || 0);
 }
-
 
 function escapeHTML(value) {
     return String(value ?? "").replace(
@@ -105,11 +103,9 @@ function escapeHTML(value) {
     );
 }
 
-
 function notify(message) {
     alert(message);
 }
-
 
 function dateFormat(value) {
     if (!value) return "Date inconnue";
@@ -125,11 +121,9 @@ function dateFormat(value) {
     return date.toLocaleString("fr-FR");
 }
 
-
 function today() {
     return new Date().toDateString();
 }
-
 
 function isToday(item) {
     const date = item.date?.toDate
@@ -140,7 +134,6 @@ function isToday(item) {
         date.toDateString() === today();
 }
 
-
 function showSyncStatus(message) {
     const element = $("sync-status");
 
@@ -148,7 +141,6 @@ function showSyncStatus(message) {
         element.textContent = message;
     }
 }
-
 
 function createOperationId() {
     if (crypto.randomUUID) {
@@ -160,7 +152,6 @@ function createOperationId() {
         "-" +
         Math.random().toString(36).slice(2);
 }
-
 
 function isNetworkError(error) {
     const networkCodes = [
@@ -178,62 +169,134 @@ function isNetworkError(error) {
 
 
 // ======================================================
-// 3. NAVIGATION
+// 3. NAVIGATION CORRIGÉE
 // ======================================================
+
+function showPage(pageId) {
+
+    const selectedPage = $(pageId);
+
+    if (!selectedPage) {
+        console.error("Page introuvable :", pageId);
+        return;
+    }
+
+    // Masquer toutes les pages
+    document.querySelectorAll(".page").forEach(section => {
+        section.hidden = true;
+        section.classList.remove("active");
+        section.style.display = "none";
+    });
+
+    // Désactiver tous les boutons
+    document.querySelectorAll(".nav-button").forEach(button => {
+        button.classList.remove("active");
+    });
+
+    // Afficher la page sélectionnée
+    selectedPage.hidden = false;
+    selectedPage.classList.add("active");
+    selectedPage.style.display = "block";
+
+    // Activer le bouton correspondant
+    const activeButton = document.querySelector(
+        `.nav-button[data-page="${pageId}"]`
+    );
+
+    if (activeButton) {
+        activeButton.classList.add("active");
+    }
+
+    window.scrollTo({
+        top: 0,
+        behavior: "smooth"
+    });
+
+    console.log("Page affichée :", pageId);
+}
+
+
+function showManagementSection(sectionId) {
+
+    const selectedSection = $(sectionId);
+
+    if (!selectedSection) {
+        console.error("Rubrique de gestion introuvable :", sectionId);
+        return;
+    }
+
+    document.querySelectorAll(".management-section").forEach(section => {
+        section.hidden = true;
+        section.style.display = "none";
+    });
+
+    selectedSection.hidden = false;
+    selectedSection.style.display = "block";
+
+    window.scrollTo({
+        top: 0,
+        behavior: "smooth"
+    });
+}
+
 
 function initializeNavigation() {
 
     if (navigationInitialized) return;
 
+    const navButtons = document.querySelectorAll(".nav-button");
+
+    if (!navButtons.length) {
+        console.error("Aucun bouton de navigation trouvé.");
+        return;
+    }
+
     navigationInitialized = true;
 
-    document.querySelectorAll(".nav-button").forEach(button => {
+    // Navigation principale
+    navButtons.forEach(button => {
 
-        button.addEventListener("click", () => {
+        button.addEventListener("click", event => {
 
-            const page = button.dataset.page;
+            event.preventDefault();
 
-            document.querySelectorAll(".page").forEach(section => {
-                section.hidden = true;
-                section.classList.remove("active");
-            });
+            const pageId = button.dataset.page;
 
-            document.querySelectorAll(".nav-button").forEach(item => {
-                item.classList.remove("active");
-            });
-
-            const selectedPage = $(page);
-
-            if (selectedPage) {
-                selectedPage.hidden = false;
-                selectedPage.classList.add("active");
+            if (pageId) {
+                showPage(pageId);
             }
-
-            button.classList.add("active");
 
         });
 
     });
 
-
+    // Navigation des rubriques de gestion
     document.querySelectorAll(".management-menu button").forEach(button => {
 
-        button.addEventListener("click", () => {
+        button.addEventListener("click", event => {
 
-            document.querySelectorAll(".management-section").forEach(section => {
-                section.hidden = true;
-            });
+            event.preventDefault();
 
-            const section = $(button.dataset.section);
+            const sectionId = button.dataset.section;
 
-            if (section) {
-                section.hidden = false;
+            if (sectionId) {
+                showManagementSection(sectionId);
             }
 
         });
 
     });
 
+    // État initial
+    const activeButton = document.querySelector(
+        ".nav-button.active"
+    );
+
+    const initialPage = activeButton?.dataset.page || "dashboard";
+
+    showPage(initialPage);
+
+    console.log("Navigation Dépôt Sarah activée.");
 }
 
 
@@ -252,7 +315,6 @@ async function loadAllData() {
         showSyncStatus("Chargement des données...");
 
         const results = await Promise.all([
-
             getProducts(),
             getCustomers(),
             getSales(),
@@ -260,7 +322,6 @@ async function loadAllData() {
             getPurchases(),
             getExpenses(),
             getLosses()
-
         ]);
 
         products = results[0] || [];
@@ -305,29 +366,17 @@ async function loadAllData() {
 function renderEverything() {
 
     renderDashboard();
-
     renderProducts();
-
     renderProductOptions();
-
     renderCustomers();
-
     renderCustomerOptions();
-
     renderSales();
-
     renderSuppliers();
-
     renderPurchases();
-
     renderExpenses();
-
     renderLosses();
-
     refreshManagementOptions();
-
     renderReports();
-
     renderUsers();
 
 }
@@ -433,17 +482,11 @@ async function handleProductForm(event) {
         const data = {
 
             name: $("product-name").value.trim(),
-
             brand: $("product-brand").value.trim(),
-
             unitsPerCrate: number($("product-units").value),
-
             totalBottles: number($("product-quantity").value),
-
             purchasePrice: number($("product-cost").value),
-
             sellingPrice: number($("product-price").value),
-
             lowStockThreshold: number($("product-threshold").value)
 
         };
@@ -663,7 +706,6 @@ async function handleCustomerForm(event) {
         await addCustomer({
 
             name: $("customer-name").value.trim(),
-
             phone: $("customer-phone").value.trim()
 
         });
@@ -798,11 +840,8 @@ async function payCustomer(customerId) {
         await recordCustomerPayment({
 
             customerId,
-
             amount,
-
             method: method.trim(),
-
             operationId
 
         });
@@ -840,7 +879,6 @@ async function handleSaleForm(event) {
     }
 
     const crates = number($("sale-crates").value);
-
     const extraBottles = number($("sale-bottles").value);
 
     if (
@@ -872,7 +910,6 @@ async function handleSaleForm(event) {
     const paymentMode = $("sale-payment").value;
 
     const cratePriceInput = $("sale-crate-price").value;
-
     const bottlePriceInput = $("sale-bottle-price").value;
 
     const bottlePrice = bottlePriceInput === ""
@@ -928,27 +965,18 @@ async function handleSaleForm(event) {
         items: [{
 
             productId,
-
             crates,
-
             extraBottles,
-
             cratePrice,
-
             bottlePrice
 
         }],
 
         customerId,
-
         customerName: customer?.name || "Client comptant",
-
         paymentMode,
-
         paymentMethod: paymentMode,
-
         amountPaid,
-
         operationId
 
     };
@@ -1260,7 +1288,6 @@ function createManagementForms() {
 
     }
 
-
     if (purchasesSection && !$("purchase-form")) {
 
         purchasesSection.insertAdjacentHTML(
@@ -1308,7 +1335,6 @@ function createManagementForms() {
 
     }
 
-
     if (expensesSection && !$("expense-form")) {
 
         expensesSection.insertAdjacentHTML(
@@ -1340,7 +1366,6 @@ function createManagementForms() {
         );
 
     }
-
 
     if (lossesSection && !$("loss-form")) {
 
@@ -1397,7 +1422,6 @@ function refreshManagementOptions() {
 
     }
 
-
     if (lossSelect) {
 
         const previous = lossSelect.value;
@@ -1413,7 +1437,6 @@ function refreshManagementOptions() {
         }
 
     }
-
 
     if (supplierSelect) {
 
@@ -1455,7 +1478,6 @@ async function handleSupplierForm(event) {
         await addSupplier({
 
             name: $("supplier-name").value.trim(),
-
             phone: $("supplier-phone").value.trim()
 
         });
@@ -1493,9 +1515,7 @@ async function handlePurchaseForm(event) {
     }
 
     const crates = number($("purchase-crates").value);
-
     const extraBottles = number($("purchase-bottles").value);
-
     const purchasePrice = number($("purchase-cost").value);
 
     if (
@@ -1546,9 +1566,7 @@ async function handlePurchaseForm(event) {
         }],
 
         supplierId,
-
         amountPaid,
-
         operationId
 
     };
@@ -1645,11 +1663,8 @@ async function handleExpenseForm(event) {
         await addExpense({
 
             title: $("expense-title").value.trim(),
-
             category: $("expense-category").value.trim(),
-
             amount: number($("expense-amount").value),
-
             description: $("expense-description").value.trim()
 
         });
@@ -1687,9 +1702,7 @@ async function handleLossForm(event) {
         await recordLoss({
 
             productId: $("loss-product").value,
-
             quantity: number($("loss-quantity").value),
-
             reason: $("loss-reason").value.trim()
 
         });
@@ -1780,9 +1793,6 @@ function renderUsers() {
         return;
 
     }
-
-    // Ne pas recréer le contenu à chaque actualisation.
-    // Cela évite d'effacer les demandes déjà chargées.
 
     if ($("user-requests-list")) return;
 
@@ -1972,22 +1982,18 @@ async function processOfflineOperation(operation) {
             return await createSale({
 
                 ...operation.payload,
-
                 operationId: operation.operationId
 
             });
-
 
         case "createPurchase":
 
             return await createPurchase({
 
                 ...operation.payload,
-
                 operationId: operation.operationId
 
             });
-
 
         default:
 
@@ -2100,19 +2106,12 @@ async function exportBackup() {
         const data = {
 
             exportDate: new Date().toISOString(),
-
             products,
-
             customers,
-
             sales,
-
             suppliers,
-
             purchases,
-
             expenses,
-
             losses
 
         };
@@ -2252,6 +2251,8 @@ function initializeForms() {
 
         const target = event.target;
 
+        if (!(target instanceof Element)) return;
+
         const stockButton = target.closest("[data-stock]");
 
         if (stockButton) {
@@ -2321,8 +2322,10 @@ async function initializeApplication(user, isAdmin) {
 
     }
 
+    // Initialiser la navigation
     initializeNavigation();
 
+    // Initialiser les rubriques et formulaires
     createManagementForms();
 
     initializeBackup();
@@ -2381,16 +2384,25 @@ async function initializeApplication(user, isAdmin) {
 
 
 // ======================================================
-// CORRECTION DE LA NAVIGATION
+// 32. INITIALISATION INDÉPENDANTE DE LA NAVIGATION
 // ======================================================
 
-document.addEventListener("DOMContentLoaded", () => {
+// Le menu est initialisé dès que le HTML est prêt.
+// Il ne dépend plus de la réception de l'événement Firebase.
+
+if (document.readyState === "loading") {
+
+    document.addEventListener(
+        "DOMContentLoaded",
+        initializeNavigation,
+        { once: true }
+    );
+
+} else {
 
     initializeNavigation();
 
-    console.log("Navigation Dépôt Sarah activée.");
-
-});
+}
 
 
 // ======================================================
