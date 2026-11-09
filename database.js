@@ -1,6 +1,7 @@
 // ======================================================
 // DÉPÔT SARAH V2
 // DATABASE.JS — MOTEUR CENTRAL DES DONNÉES
+// VERSION HARMONISÉE
 // FIREBASE SDK 10.14.1
 // ======================================================
 
@@ -64,7 +65,12 @@ function generateId() {
 }
 
 function toNumber(value, fallback = 0) {
+    if (value === null || value === undefined || value === "") {
+        return fallback;
+    }
+
     const number = Number(value);
+
     return Number.isFinite(number) ? number : fallback;
 }
 
@@ -92,16 +98,16 @@ function nowDate() {
     return new Date().toISOString();
 }
 
+// ======================================================
+// 3. NORMALISATION DES DONNÉES
+// ======================================================
+
 function getStock(product) {
-    if (product.totalBottles !== undefined) {
-        return toNumber(product.totalBottles);
-    }
-
-    if (product.qty !== undefined) {
-        return toNumber(product.qty);
-    }
-
-    return toNumber(product.quantity);
+    return toNumber(
+        product.totalBottles ??
+        product.qty ??
+        product.quantity
+    );
 }
 
 function normalizeRecord(id, data, collectionName) {
@@ -110,7 +116,6 @@ function normalizeRecord(id, data, collectionName) {
         ...data
     };
 
-    // Normalisation réservée aux produits.
     if (collectionName === "products") {
         const stock = getStock(data);
 
@@ -119,13 +124,44 @@ function normalizeRecord(id, data, collectionName) {
             12
         );
 
+        const purchasePrice = toNumber(
+            data.purchasePrice ??
+            data.costPrice ??
+            data.cost
+        );
+
+        const sellingPrice = toNumber(
+            data.sellingPrice ??
+            data.bottlePrice ??
+            data.price
+        );
+
+        const threshold = toNumber(
+            data.lowStockThreshold ??
+            data.threshold,
+            12
+        );
+
         return {
             ...record,
+
             quantity: stock,
             qty: stock,
             totalBottles: stock,
+
             unitsPerCrate: units,
-            units
+            units,
+
+            purchasePrice,
+            costPrice: purchasePrice,
+            cost: purchasePrice,
+
+            sellingPrice,
+            bottlePrice: sellingPrice,
+            price: sellingPrice,
+
+            lowStockThreshold: threshold,
+            threshold
         };
     }
 
@@ -151,7 +187,7 @@ function calculateDebt(total, paid) {
 }
 
 // ======================================================
-// 3. LECTURE DES DONNÉES
+// 4. LECTURE DES DONNÉES
 // ======================================================
 
 export async function getAll(name) {
@@ -183,7 +219,7 @@ export async function getById(name, id) {
 }
 
 // ======================================================
-// 4. CRÉATION GÉNÉRALE
+// 5. CRÉATION GÉNÉRALE
 // ======================================================
 
 export async function createRecord(name, data) {
@@ -205,7 +241,7 @@ export async function createRecord(name, data) {
 }
 
 // ======================================================
-// 5. MODIFICATION GÉNÉRALE
+// 6. MODIFICATION GÉNÉRALE
 // ======================================================
 
 export async function updateRecord(name, id, data) {
@@ -221,26 +257,41 @@ export async function updateRecord(name, id, data) {
 }
 
 // ======================================================
-// 6. SUPPRESSION GÉNÉRALE
+// 7. SUPPRESSION GÉNÉRALE
 // ======================================================
 
 export async function removeRecord(name, id) {
     await deleteDoc(getDocument(name, id));
+
     return true;
 }
 
 // ======================================================
-// 7. PRODUITS
+// 8. PRODUITS
 // ======================================================
 
 export async function addProduct(data) {
+    const name = data.name?.trim();
+
+    if (!name) {
+        throw new Error("Le nom du produit est obligatoire.");
+    }
+
     const units = validatePositive(
         data.unitsPerCrate ?? data.units ?? 12,
         "Le nombre de bouteilles par casier doit être positif."
     );
 
+    if (!Number.isInteger(units)) {
+        throw new Error(
+            "Le nombre de bouteilles par casier doit être entier."
+        );
+    }
+
     const stock = toNumber(
-        data.totalBottles ?? data.qty ?? data.quantity
+        data.totalBottles ??
+        data.qty ??
+        data.quantity
     );
 
     if (!Number.isInteger(stock) || stock < 0) {
@@ -248,19 +299,33 @@ export async function addProduct(data) {
     }
 
     const purchasePrice = toNumber(
-        data.purchasePrice ?? data.costPrice
+        data.purchasePrice ??
+        data.costPrice ??
+        data.cost
     );
 
     const sellingPrice = toNumber(
-        data.sellingPrice ?? data.bottlePrice
+        data.sellingPrice ??
+        data.bottlePrice ??
+        data.price
     );
 
     if (purchasePrice < 0 || sellingPrice < 0) {
         throw new Error("Les prix ne peuvent pas être négatifs.");
     }
 
+    const threshold = toNumber(
+        data.lowStockThreshold ??
+        data.threshold ??
+        12
+    );
+
+    if (threshold < 0) {
+        throw new Error("Le seuil d'alerte est invalide.");
+    }
+
     const product = {
-        name: data.name?.trim() || "Produit sans nom",
+        name,
         brand: data.brand || "",
         format: data.format || "",
 
@@ -272,13 +337,17 @@ export async function addProduct(data) {
         qty: stock,
 
         purchasePrice,
+        costPrice: purchasePrice,
+
         sellingPrice,
+        bottlePrice: sellingPrice,
 
         cratePrice: toNumber(data.cratePrice),
 
-        lowStockThreshold: toNumber(
-            data.lowStockThreshold ?? 12
-        )
+        lowStockThreshold: threshold,
+        threshold,
+
+        active: true
     };
 
     return await createRecord("products", product);
@@ -312,18 +381,48 @@ export async function updateProduct(id, data) {
         updates.qty = stock;
     }
 
-    if (
-        updates.purchasePrice !== undefined &&
-        toNumber(updates.purchasePrice) < 0
-    ) {
-        throw new Error("Prix d'achat invalide.");
+    const purchasePrice =
+        updates.purchasePrice ??
+        updates.costPrice ??
+        updates.cost;
+
+    if (purchasePrice !== undefined) {
+        if (toNumber(purchasePrice) < 0) {
+            throw new Error("Prix d'achat invalide.");
+        }
+
+        updates.purchasePrice = toNumber(purchasePrice);
+        updates.costPrice = toNumber(purchasePrice);
+    }
+
+    const sellingPrice =
+        updates.sellingPrice ??
+        updates.bottlePrice ??
+        updates.price;
+
+    if (sellingPrice !== undefined) {
+        if (toNumber(sellingPrice) < 0) {
+            throw new Error("Prix de vente invalide.");
+        }
+
+        updates.sellingPrice = toNumber(sellingPrice);
+        updates.bottlePrice = toNumber(sellingPrice);
     }
 
     if (
-        updates.sellingPrice !== undefined &&
-        toNumber(updates.sellingPrice) < 0
+        updates.lowStockThreshold !== undefined ||
+        updates.threshold !== undefined
     ) {
-        throw new Error("Prix de vente invalide.");
+        const threshold = toNumber(
+            updates.lowStockThreshold ?? updates.threshold
+        );
+
+        if (threshold < 0) {
+            throw new Error("Seuil d'alerte invalide.");
+        }
+
+        updates.lowStockThreshold = threshold;
+        updates.threshold = threshold;
     }
 
     return await updateRecord("products", id, updates);
@@ -334,7 +433,7 @@ export async function deleteProduct(id) {
 }
 
 // ======================================================
-// 8. AJUSTEMENT DU STOCK
+// 9. AJUSTEMENT DU STOCK
 // ======================================================
 
 export async function updateStock(
@@ -390,12 +489,18 @@ export async function updateStock(
 }
 
 // ======================================================
-// 9. CLIENTS
+// 10. CLIENTS
 // ======================================================
 
 export async function addCustomer(data) {
+    const name = data.name?.trim();
+
+    if (!name) {
+        throw new Error("Le nom du client est obligatoire.");
+    }
+
     return await createRecord("customers", {
-        name: data.name?.trim() || "",
+        name,
         phone: data.phone || "",
         address: data.address || "",
         debt: toNumber(data.debt),
@@ -412,12 +517,18 @@ export async function updateCustomer(id, data) {
 }
 
 // ======================================================
-// 10. FOURNISSEURS
+// 11. FOURNISSEURS
 // ======================================================
 
 export async function addSupplier(data) {
+    const name = data.name?.trim();
+
+    if (!name) {
+        throw new Error("Le nom du fournisseur est obligatoire.");
+    }
+
     return await createRecord("suppliers", {
-        name: data.name?.trim() || "",
+        name,
         phone: data.phone || "",
         address: data.address || "",
         debt: toNumber(data.debt)
@@ -429,7 +540,7 @@ export async function getSuppliers() {
 }
 
 // ======================================================
-// 11. VENTES
+// 12. VENTES
 // ======================================================
 
 export async function createSale(data) {
@@ -550,7 +661,11 @@ export async function createSale(data) {
             const bottlePrice =
                 item.bottlePrice > 0
                     ? item.bottlePrice
-                    : toNumber(product.sellingPrice);
+                    : toNumber(
+                        product.sellingPrice ??
+                        product.bottlePrice ??
+                        product.price
+                    );
 
             const cratePrice =
                 item.cratePrice > 0
@@ -562,7 +677,9 @@ export async function createSale(data) {
                     );
 
             const costPrice = toNumber(
-                product.purchasePrice ?? product.costPrice
+                product.purchasePrice ??
+                product.costPrice ??
+                product.cost
             );
 
             if (
@@ -570,7 +687,9 @@ export async function createSale(data) {
                 cratePrice < 0 ||
                 costPrice < 0
             ) {
-                throw new Error("Prix de vente ou d'achat invalide.");
+                throw new Error(
+                    "Prix de vente ou d'achat invalide."
+                );
             }
 
             const lineTotal =
@@ -741,7 +860,7 @@ export async function getSales() {
 }
 
 // ======================================================
-// 12. PAIEMENTS CLIENTS
+// 13. PAIEMENTS CLIENTS
 // ======================================================
 
 export async function recordCustomerPayment(data) {
@@ -819,7 +938,7 @@ export async function getCustomerPayments() {
 }
 
 // ======================================================
-// 13. ACHATS ET APPROVISIONNEMENTS
+// 14. ACHATS ET APPROVISIONNEMENTS
 // ======================================================
 
 export async function createPurchase(data) {
@@ -856,7 +975,9 @@ export async function createPurchase(data) {
                 productId: item.productId,
                 quantity: 0,
                 purchasePrice: toNumber(
-                    item.purchasePrice ?? item.costPrice
+                    item.purchasePrice ??
+                    item.costPrice ??
+                    item.cost
                 )
             };
 
@@ -887,10 +1008,13 @@ export async function createPurchase(data) {
 
             if (
                 item.purchasePrice !== undefined ||
-                item.costPrice !== undefined
+                item.costPrice !== undefined ||
+                item.cost !== undefined
             ) {
                 group.purchasePrice = toNumber(
-                    item.purchasePrice ?? item.costPrice
+                    item.purchasePrice ??
+                    item.costPrice ??
+                    item.cost
                 );
             }
 
@@ -919,7 +1043,11 @@ export async function createPurchase(data) {
             const cost =
                 item.purchasePrice > 0
                     ? item.purchasePrice
-                    : toNumber(product.purchasePrice);
+                    : toNumber(
+                        product.purchasePrice ??
+                        product.costPrice ??
+                        product.cost
+                    );
 
             if (cost < 0) {
                 throw new Error("Prix d'achat invalide.");
@@ -990,6 +1118,7 @@ export async function createPurchase(data) {
                 quantity: item.newStock,
                 qty: item.newStock,
                 purchasePrice: item.purchasePrice,
+                costPrice: item.purchasePrice,
                 updatedAt: serverTimestamp()
             });
 
@@ -1052,7 +1181,7 @@ export async function getPurchases() {
 }
 
 // ======================================================
-// 14. DÉPENSES
+// 15. DÉPENSES
 // ======================================================
 
 export async function addExpense(data) {
@@ -1075,7 +1204,7 @@ export async function getExpenses() {
 }
 
 // ======================================================
-// 15. PERTES ET CASSES
+// 16. PERTES ET CASSES
 // ======================================================
 
 export async function recordLoss(data) {
@@ -1085,7 +1214,9 @@ export async function recordLoss(data) {
     );
 
     if (!Number.isInteger(quantity)) {
-        throw new Error("La quantité doit être un nombre entier.");
+        throw new Error(
+            "La quantité doit être un nombre entier."
+        );
     }
 
     if (!data.productId) {
@@ -1114,7 +1245,11 @@ export async function recordLoss(data) {
 
         const newStock = oldStock - quantity;
 
-        const cost = toNumber(product.purchasePrice);
+        const cost = toNumber(
+            product.purchasePrice ??
+            product.costPrice ??
+            product.cost
+        );
 
         const lossRef = doc(getCollection("losses"));
 
@@ -1158,7 +1293,7 @@ export async function getLosses() {
 }
 
 // ======================================================
-// 16. MOUVEMENTS DE STOCK
+// 17. MOUVEMENTS DE STOCK
 // ======================================================
 
 export async function getStockMovements() {
@@ -1166,7 +1301,7 @@ export async function getStockMovements() {
 }
 
 // ======================================================
-// 17. VENTES PAR CLIENT
+// 18. VENTES PAR CLIENT
 // ======================================================
 
 export async function getCustomerSales(customerId) {
@@ -1178,7 +1313,7 @@ export async function getCustomerSales(customerId) {
 }
 
 // ======================================================
-// 18. RÉSUMÉ FINANCIER
+// 19. RÉSUMÉ FINANCIER
 // ======================================================
 
 export async function getFinancialSummary() {
@@ -1313,7 +1448,7 @@ export async function getFinancialSummary() {
 }
 
 // ======================================================
-// 19. ANNULATION D'UNE VENTE NON ENCAISSÉE
+// 20. ANNULATION D'UNE VENTE NON ENCAISSÉE
 // ======================================================
 
 export async function deleteSale(saleId) {
