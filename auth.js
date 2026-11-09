@@ -1,9 +1,8 @@
 // ======================================================
 // DÉPÔT SARAH V2
-// AUTH.JS — VERSION CORRIGÉE ET HARMONISÉE
+// AUTH.JS — AUTHENTIFICATION ET GESTION DES RÔLES
 // ======================================================
 
-// FIREBASE
 import { auth, db, googleProvider } from "./firebase.js";
 
 import {
@@ -22,427 +21,371 @@ import {
     serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
-
 // ======================================================
-// 1. CONFIGURATION
+// CONFIGURATION
 // ======================================================
 
 export const ADMIN_EMAIL = "christopheatangana2@gmail.com";
 
-let authInitialized = false;
-let currentAccessUser = null;
+export let currentAccessUser = null;
+export let currentUserRole = null;
 
+let authInitialized = false;
 
 // ======================================================
-// 2. VÉRIFICATION ADMINISTRATEUR
+// IDENTIFICATION DES RÔLES
 // ======================================================
 
 export function isAdmin(user = auth.currentUser) {
-
     return Boolean(
         user &&
         user.email &&
         user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
     );
-
 }
 
-
-// ======================================================
-// 3. MESSAGES D'AUTHENTIFICATION
-// ======================================================
-
-function showAuthMessage(message, type = "error") {
-
-    const element = document.getElementById("auth-message");
-
-    if (!element) return;
-
-    element.textContent = message;
-    element.className = `auth-message ${type}`;
-
+export function isOperator() {
+    return currentUserRole === "operator";
 }
 
+export function hasAdminAccess() {
+    return currentUserRole === "admin";
+}
 
 // ======================================================
-// 4. CRÉATION D'UNE DEMANDE D'ACCÈS
+// VÉRIFICATION DES AUTORISATIONS
 // ======================================================
 
-export async function createAccessRequest(user, name = "") {
+export async function checkUserAccess(user) {
 
     if (!user) {
-        throw new Error("Utilisateur non connecté.");
+        return {
+            approved: false,
+            role: null
+        };
     }
 
     if (isAdmin(user)) {
-        return true;
+
+        await setDoc(
+            doc(db, "authorizedUsers", user.uid),
+            {
+                uid: user.uid,
+                email: user.email,
+                name: user.displayName || "Administrateur",
+                status: "approved",
+                approved: true,
+                role: "admin",
+                updatedAt: serverTimestamp()
+            },
+            { merge: true }
+        );
+
+        return {
+            approved: true,
+            role: "admin"
+        };
     }
 
-    const requestRef = doc(db, "userRequests", user.uid);
+    const userRef = doc(db, "authorizedUsers", user.uid);
+    const userSnap = await getDoc(userRef);
 
+    if (!userSnap.exists()) {
+        return {
+            approved: false,
+            role: null
+        };
+    }
+
+    const data = userSnap.data();
+
+    const approved =
+        data.status === "approved" ||
+        data.approved === true;
+
+    if (!approved) {
+        return {
+            approved: false,
+            role: null
+        };
+    }
+
+    // Tous les utilisateurs approuvés non administrateurs
+    // deviennent des opérateurs.
+    return {
+        approved: true,
+        role: "operator"
+    };
+}
+
+// ======================================================
+// DEMANDE D'ACCÈS
+// ======================================================
+
+async function createAccessRequest(user, name = "") {
+
+    if (!user) return false;
+
+    const requestRef = doc(db, "userRequests", user.uid);
     const requestSnap = await getDoc(requestRef);
 
     if (requestSnap.exists()) {
+        const data = requestSnap.data();
 
-        const existing = requestSnap.data();
-
-        if (existing.status === "approved") {
-            return true;
-        }
-
-        if (existing.status === "pending") {
-            return false;
-        }
-
+        if (data.status === "approved") return true;
+        if (data.status === "pending") return false;
     }
 
     await setDoc(requestRef, {
-
         uid: user.uid,
         email: user.email || "",
         name: name || user.displayName || "",
         status: "pending",
         createdAt: serverTimestamp()
-
     });
 
     return false;
-
 }
 
-
 // ======================================================
-// 5. VÉRIFICATION DES AUTORISATIONS
+// APPROUVER UN UTILISATEUR
+// Réservé à l'administrateur
 // ======================================================
 
-export async function checkUserAccess(user) {
+export async function approveUser(uid, email, name = "") {
 
-    if (!user) return false;
-
-    // L'administrateur principal est toujours autorisé.
-    if (isAdmin(user)) return true;
-
-    const userRef = doc(db, "authorizedUsers", user.uid);
-
-    const userSnap = await getDoc(userRef);
-
-    if (!userSnap.exists()) {
-        return false;
+    if (!isAdmin()) {
+        throw new Error("Action réservée à l'administrateur.");
     }
 
-    const data = userSnap.data();
-
-    return (
-        data.status === "approved" ||
-        data.approved === true
+    await setDoc(
+        doc(db, "authorizedUsers", uid),
+        {
+            uid,
+            email,
+            name,
+            status: "approved",
+            approved: true,
+            role: "operator",
+            updatedAt: serverTimestamp()
+        },
+        { merge: true }
     );
 
+    await setDoc(
+        doc(db, "userRequests", uid),
+        {
+            status: "approved",
+            updatedAt: serverTimestamp()
+        },
+        { merge: true }
+    );
+
+    return true;
 }
 
+// ======================================================
+// REFUSER UNE DEMANDE
+// ======================================================
+
+export async function rejectUser(uid) {
+
+    if (!isAdmin()) {
+        throw new Error("Action réservée à l'administrateur.");
+    }
+
+    await setDoc(
+        doc(db, "userRequests", uid),
+        {
+            status: "rejected",
+            updatedAt: serverTimestamp()
+        },
+        { merge: true }
+    );
+
+    return true;
+}
 
 // ======================================================
-// 6. INSCRIPTION PAR EMAIL
+// INSCRIPTION
 // ======================================================
 
 export async function registerWithEmail(name, email, password) {
 
-    try {
+    const credential = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        password
+    );
 
-        name = name.trim();
-        email = email.trim();
+    const user = credential.user;
 
-        if (!name || !email || !password) {
-            throw new Error("Tous les champs sont obligatoires.");
-        }
+    await updateProfile(user, {
+        displayName: name
+    });
 
-        if (password.length < 6) {
-            throw new Error("Le mot de passe doit contenir au moins 6 caractères.");
-        }
+    if (isAdmin(user)) {
 
-        const result = await createUserWithEmailAndPassword(
-            auth,
-            email,
-            password
+        await setDoc(
+            doc(db, "authorizedUsers", user.uid),
+            {
+                uid: user.uid,
+                email: user.email,
+                name,
+                status: "approved",
+                approved: true,
+                role: "admin",
+                createdAt: serverTimestamp()
+            },
+            { merge: true }
         );
 
-        await updateProfile(result.user, {
-            displayName: name
-        });
+    } else {
 
-        // Administrateur principal
-        if (isAdmin(result.user)) {
-
-            await setDoc(
-                doc(db, "authorizedUsers", result.user.uid),
-                {
-
-                    uid: result.user.uid,
-                    email: result.user.email,
-                    name,
-                    status: "approved",
-                    approved: true,
-                    role: "admin",
-                    createdAt: serverTimestamp()
-
-                },
-                { merge: true }
-            );
-
-            showAuthMessage(
-                "Compte administrateur créé avec succès.",
-                "success"
-            );
-
-            return result.user;
-
-        }
-
-        // Utilisateur normal : demande d'autorisation
-        await createAccessRequest(result.user, name);
-
-        showAuthMessage(
-            "Compte créé. Votre demande attend l'approbation de l'administrateur.",
-            "success"
-        );
-
-        return result.user;
-
-    } catch (error) {
-
-        console.error("Erreur inscription :", error);
-
-        showAuthMessage(getFriendlyError(error));
-
-        throw error;
-
+        await createAccessRequest(user, name);
     }
 
+    return user;
 }
 
-
 // ======================================================
-// 7. CONNEXION PAR EMAIL
+// CONNEXION PAR E-MAIL
 // ======================================================
 
 export async function loginWithEmail(email, password) {
 
-    try {
+    const credential = await signInWithEmailAndPassword(
+        auth,
+        email,
+        password
+    );
 
-        email = email.trim();
-
-        const result = await signInWithEmailAndPassword(
-            auth,
-            email,
-            password
-        );
-
-        return result.user;
-
-    } catch (error) {
-
-        console.error("Erreur connexion :", error);
-
-        showAuthMessage(getFriendlyError(error));
-
-        throw error;
-
-    }
-
+    return credential.user;
 }
 
-
 // ======================================================
-// 8. CONNEXION GOOGLE
+// CONNEXION GOOGLE
 // ======================================================
 
 export async function loginWithGoogle() {
 
-    try {
+    const credential = await signInWithPopup(
+        auth,
+        googleProvider
+    );
 
-        const result = await signInWithPopup(
-            auth,
-            googleProvider
-        );
-
-        const user = result.user;
-
-        if (!isAdmin(user)) {
-
-            await createAccessRequest(user);
-
-        }
-
-        return user;
-
-    } catch (error) {
-
-        console.error("Erreur Google :", error);
-
-        showAuthMessage(getFriendlyError(error));
-
-        throw error;
-
-    }
-
+    return credential.user;
 }
 
-
 // ======================================================
-// 9. DÉCONNEXION
+// DÉCONNEXION
 // ======================================================
 
 export async function logoutUser() {
 
-    try {
+    currentAccessUser = null;
+    currentUserRole = null;
 
-        await signOut(auth);
+    await signOut(auth);
 
-        currentAccessUser = null;
-
-        showLoginScreen();
-
-    } catch (error) {
-
-        console.error("Erreur de déconnexion :", error);
-
-        throw error;
-
-    }
-
+    showLoginScreen();
 }
 
-
 // ======================================================
-// 10. TRADUCTION DES ERREURS
-// ======================================================
-
-function getFriendlyError(error) {
-
-    const errors = {
-
-        "auth/invalid-email":
-            "Adresse e-mail invalide.",
-
-        "auth/user-not-found":
-            "Aucun compte ne correspond à cette adresse.",
-
-        "auth/wrong-password":
-            "Mot de passe incorrect.",
-
-        "auth/invalid-credential":
-            "Identifiants incorrects.",
-
-        "auth/email-already-in-use":
-            "Cette adresse possède déjà un compte.",
-
-        "auth/weak-password":
-            "Le mot de passe doit contenir au moins 6 caractères.",
-
-        "auth/popup-closed-by-user":
-            "Connexion Google annulée.",
-
-        "auth/network-request-failed":
-            "Problème de connexion Internet.",
-
-        "auth/too-many-requests":
-            "Trop de tentatives. Réessayez plus tard.",
-
-        "auth/operation-not-allowed":
-            "Cette méthode de connexion n'est pas activée dans Firebase."
-
-    };
-
-    return (
-        errors[error.code] ||
-        error.message ||
-        "Une erreur est survenue."
-    );
-
-}
-
-
-// ======================================================
-// 11. AFFICHAGE DE L'ÉCRAN DE CONNEXION
+// AFFICHAGE DES ÉCRANS
 // ======================================================
 
 function showLoginScreen() {
 
     const login = document.getElementById("login-screen");
-
     const app = document.getElementById("app-container");
 
-    if (login) login.hidden = false;
-
-    if (app) app.hidden = true;
-
+    if (login) login.style.display = "block";
+    if (app) app.style.display = "none";
 }
-
-
-// ======================================================
-// 12. AFFICHAGE DE L'APPLICATION
-// ======================================================
-
-function showApplicationScreen(user, admin) {
-
-    const login = document.getElementById("login-screen");
-
-    const app = document.getElementById("app-container");
-
-    if (login) login.hidden = true;
-
-    if (app) app.hidden = false;
-
-    const userElement = document.getElementById("current-user");
-
-    if (userElement) {
-
-        userElement.textContent =
-            `${user.displayName || user.email}` +
-            (admin ? " (Administrateur)" : "");
-
-    }
-
-    // IMPORTANT :
-    // app.js écoute également cet événement sur window.
-
-    window.dispatchEvent(
-        new CustomEvent("sarah-auth-ready", {
-
-            detail: {
-                user,
-                isAdmin: admin
-            }
-
-        })
-    );
-
-}
-
-
-// ======================================================
-// 13. ÉCRAN D'ATTENTE D'AUTORISATION
-// ======================================================
 
 function showPendingScreen() {
 
     const login = document.getElementById("login-screen");
-
     const app = document.getElementById("app-container");
 
-    if (login) login.hidden = false;
+    if (login) login.style.display = "block";
+    if (app) app.style.display = "none";
 
-    if (app) app.hidden = true;
+    const message =
+        document.getElementById("login-message") ||
+        document.getElementById("auth-message");
 
-    showAuthMessage(
-        "Votre compte est enregistré. En attente de l'approbation de l'administrateur.",
-        "warning"
-    );
-
+    if (message) {
+        message.textContent =
+            "Votre demande d'accès est en attente de validation par l'administrateur.";
+    }
 }
 
+function showApplicationScreen(user, role) {
+
+    const login = document.getElementById("login-screen");
+    const app = document.getElementById("app-container");
+
+    if (login) login.style.display = "none";
+    if (app) app.style.display = "block";
+
+    const currentUserElement =
+        document.getElementById("current-user");
+
+    if (currentUserElement) {
+
+        const name = user.displayName || user.email || "Utilisateur";
+
+        currentUserElement.textContent =
+            role === "admin"
+                ? `${name} (Administrateur)`
+                : `${name} (Opérateur)`;
+    }
+
+    window.dispatchEvent(
+        new CustomEvent("sarah-auth-ready", {
+            detail: {
+                user,
+                isAdmin: role === "admin",
+                role
+            }
+        })
+    );
+}
 
 // ======================================================
-// 14. SURVEILLANCE DE L'AUTHENTIFICATION
+// MESSAGES D'ERREUR
+// ======================================================
+
+function showAuthError(error) {
+
+    console.error("Erreur authentification :", error);
+
+    const message =
+        document.getElementById("login-message") ||
+        document.getElementById("auth-message");
+
+    if (!message) return;
+
+    const messages = {
+        "auth/invalid-email": "Adresse e-mail invalide.",
+        "auth/user-not-found": "Aucun compte correspondant.",
+        "auth/wrong-password": "Mot de passe incorrect.",
+        "auth/invalid-credential": "Identifiants incorrects.",
+        "auth/email-already-in-use": "Cette adresse e-mail est déjà utilisée.",
+        "auth/weak-password": "Le mot de passe doit contenir au moins 6 caractères.",
+        "auth/popup-closed-by-user": "Connexion Google annulée."
+    };
+
+    message.textContent =
+        messages[error.code] ||
+        error.message ||
+        "Une erreur est survenue.";
+}
+
+// ======================================================
+// INITIALISATION DE L'AUTHENTIFICATION
 // ======================================================
 
 export function initAuth() {
@@ -451,11 +394,12 @@ export function initAuth() {
 
     authInitialized = true;
 
-    onAuthStateChanged(auth, async user => {
+    onAuthStateChanged(auth, async (user) => {
 
         if (!user) {
 
             currentAccessUser = null;
+            currentUserRole = null;
 
             showLoginScreen();
 
@@ -464,73 +408,61 @@ export function initAuth() {
             );
 
             return;
-
-        }
-
-        // Éviter de réinitialiser inutilement le même utilisateur.
-        if (currentAccessUser === user.uid) {
-            return;
         }
 
         try {
 
-            const admin = isAdmin(user);
+            const access = await checkUserAccess(user);
 
-            const approved = await checkUserAccess(user);
-
-            if (!approved) {
-
-                await createAccessRequest(user);
+            if (!access.approved) {
 
                 currentAccessUser = null;
+                currentUserRole = null;
+
+                await createAccessRequest(user);
 
                 showPendingScreen();
 
                 return;
-
             }
 
-            currentAccessUser = user.uid;
+            currentAccessUser = user;
+            currentUserRole = access.role;
 
-            showApplicationScreen(user, admin);
+            showApplicationScreen(user, access.role);
 
         } catch (error) {
 
             console.error(
-                "Erreur de vérification des autorisations :",
+                "Erreur de vérification des accès :",
                 error
             );
 
-            currentAccessUser = null;
-
             showLoginScreen();
-
-            showAuthMessage(
-                "Impossible de vérifier vos autorisations. Vérifiez votre connexion Internet et les règles Firebase."
-            );
-
+            showAuthError(error);
         }
-
     });
+}
 
+// ======================================================
+// FORMULAIRES ET BOUTONS
+// ======================================================
 
-    // ==================================================
-    // FORMULAIRE DE CONNEXION
-    // ==================================================
+function initializeAuthForms() {
 
     const loginForm = document.getElementById("login-form");
 
     if (loginForm) {
 
-        loginForm.addEventListener("submit", async event => {
+        loginForm.addEventListener("submit", async (event) => {
 
             event.preventDefault();
 
             const email =
-                document.getElementById("login-email").value;
+                document.getElementById("login-email")?.value.trim();
 
             const password =
-                document.getElementById("login-password").value;
+                document.getElementById("login-password")?.value;
 
             try {
 
@@ -538,58 +470,38 @@ export function initAuth() {
 
             } catch (error) {
 
-                console.error(error);
-
+                showAuthError(error);
             }
-
         });
-
     }
-
-
-    // ==================================================
-    // FORMULAIRE D'INSCRIPTION
-    // ==================================================
 
     const registerForm = document.getElementById("register-form");
 
     if (registerForm) {
 
-        registerForm.addEventListener("submit", async event => {
+        registerForm.addEventListener("submit", async (event) => {
 
             event.preventDefault();
 
             const name =
-                document.getElementById("register-name").value;
+                document.getElementById("register-name")?.value.trim();
 
             const email =
-                document.getElementById("register-email").value;
+                document.getElementById("register-email")?.value.trim();
 
             const password =
-                document.getElementById("register-password").value;
+                document.getElementById("register-password")?.value;
 
             try {
 
-                await registerWithEmail(
-                    name,
-                    email,
-                    password
-                );
+                await registerWithEmail(name, email, password);
 
             } catch (error) {
 
-                console.error(error);
-
+                showAuthError(error);
             }
-
         });
-
     }
-
-
-    // ==================================================
-    // CONNEXION GOOGLE
-    // ==================================================
 
     const googleButton =
         document.getElementById("google-login");
@@ -604,41 +516,51 @@ export function initAuth() {
 
             } catch (error) {
 
-                console.error(error);
-
+                showAuthError(error);
             }
-
         });
-
     }
-
-
-    // ==================================================
-    // DÉCONNEXION
-    // ==================================================
 
     const logoutButton =
         document.getElementById("logout-button");
 
     if (logoutButton) {
 
-        logoutButton.addEventListener(
-            "click",
-            logoutUser
-        );
+        logoutButton.addEventListener("click", async () => {
 
+            try {
+
+                await logoutUser();
+
+            } catch (error) {
+
+                showAuthError(error);
+            }
+        });
     }
 
+    const showRegisterButton =
+        document.getElementById("show-register");
+
+    if (showRegisterButton) {
+
+        showRegisterButton.addEventListener("click", () => {
+
+            const loginForm =
+                document.getElementById("login-form");
+
+            const registerForm =
+                document.getElementById("register-form");
+
+            if (loginForm) loginForm.style.display = "none";
+            if (registerForm) registerForm.style.display = "block";
+        });
+    }
 }
 
-
 // ======================================================
-// 15. LANCEMENT AUTOMATIQUE
+// DÉMARRAGE
 // ======================================================
 
+initializeAuthForms();
 initAuth();
-
-
-// ======================================================
-// FIN AUTH.JS — DÉPÔT SARAH V2
-// ======================================================
