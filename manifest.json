@@ -1,4 +1,5 @@
 {
+  "id": "./",
   "name": "Dépôt Sarah - Gestion intelligente",
   "short_name": "Dépôt Sarah",
   "description": "Application de gestion des stocks, ventes, clients et finances du dépôt.",
@@ -8,5 +9,13 @@
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#f1f5f9",
-  "theme_color": "#14532d"
+  "theme_color": "#14532d",
+  "icons": [
+    {
+      "src": "./icon-512.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    }
+  ]
 }
