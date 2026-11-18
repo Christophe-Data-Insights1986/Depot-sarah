@@ -47,7 +47,7 @@ import {
     getStockMovements,
     getFinancialSummary,
     deleteSale
-} from "./database.js";
+} from "./database-router.js";
 
 import {
     enqueueOperation,
