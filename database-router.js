@@ -6,6 +6,24 @@
 // SAAS   : tenant-business-database.js
 // FIREBASE SDK 10.14.1
 // ======================================================
+//
+// RÈGLES DE SÉCURITÉ :
+//   - Mode "tenant" : EXIGE un currentTenantId valide
+//     (chaîne non vide). Sinon → erreur explicite AVANT
+//     d'appeler le moteur tenant.
+//   - Mode inconnu (valeur ni "legacy", ni "tenant", ni null
+//     ni undefined) : ERREUR EXPLICITE. Aucun repli
+//     automatique vers LEGACY.
+//   - Mode null/undefined : LEGACY (mode pré-authentification),
+//     avec log warn unique.
+//   - Les arguments (dont operationId) sont transmis TELS
+//     QUELS aux moteurs. L'idempotence de la synchronisation
+//     hors connexion est préservée.
+//   - L'isolation multi-dépôt est assurée par
+//     tenant-business-database.js (via requireTenant()).
+//     Le routeur ne vérifie PAS l'appartenance de l'utilisateur
+//     au dépôt : c'est le rôle du moteur + des règles Firestore.
+// ======================================================
 
 import * as legacyDatabase from "./database.js";
 
@@ -13,12 +31,38 @@ import * as tenantDatabase from "./tenant-business-database.js";
 
 import { currentAccountMode } from "./auth.js";
 
+import { currentTenantId } from "./tenant-context.js";
+
 // ======================================================
 // COLLECTIONS
 // Les deux moteurs utilisent la même structure métier.
+// Le routeur expose la version LEGACY.
+// ⚠️ Une divergence future entre LEGACY et TENANT imposerait
+//    de rendre cet export dynamique.
 // ======================================================
 
 export const COLLECTIONS = legacyDatabase.COLLECTIONS;
+
+// ======================================================
+// ÉTAT INTERNE (log warn unique pour le mode pré-auth)
+// ======================================================
+
+let warnedPreAuthMode = false;
+
+// ======================================================
+// VALIDATION DU CONTEXTE TENANT
+// ======================================================
+//
+// Un currentTenantId valide est une chaîne non vide.
+// Toute autre valeur (null, undefined, objet, chaîne vide,
+// 0, false) est refusée.
+
+function isValidTenantId(tenantId) {
+    return (
+        typeof tenantId === "string" &&
+        tenantId.trim().length > 0
+    );
+}
 
 // ======================================================
 // SÉLECTION DU MOTEUR ACTIF
@@ -26,19 +70,61 @@ export const COLLECTIONS = legacyDatabase.COLLECTIONS;
 
 function getActiveDatabase() {
 
+    // --- Mode TENANT : contexte obligatoire ---
     if (currentAccountMode === "tenant") {
 
-        return tenantDatabase;
+        if (!isValidTenantId(currentTenantId)) {
+            throw new Error(
+                "Router : mode tenant actif mais aucun contexte de dépôt valide. " +
+                "Le contexte doit être chargé avant toute opération."
+            );
+        }
 
+        return tenantDatabase;
     }
 
-    return legacyDatabase;
+    // --- Mode LEGACY explicite ---
+    if (currentAccountMode === "legacy") {
+        return legacyDatabase;
+    }
 
+    // --- Mode pré-authentification (null/undefined) ---
+    // auth.js initialise currentAccountMode à null. Avant
+    // sarah-auth-ready, c'est l'état normal. On route LEGACY
+    // en toute sécurité, avec un log warn unique.
+    if (
+        currentAccountMode === null ||
+        currentAccountMode === undefined
+    ) {
+        if (!warnedPreAuthMode) {
+            warnedPreAuthMode = true;
+            console.warn(
+                "Router : mode de compte non défini (pré-authentification). " +
+                "Routage LEGACY par défaut."
+            );
+        }
+        return legacyDatabase;
+    }
+
+    // --- Mode inconnu : ERREUR ---
+    // Toute valeur inattendue ("guest", "admin", 0, {}, true, …)
+    // est refusée. Aucun repli silencieux vers LEGACY.
+    throw new Error(
+        "Router : mode de compte inconnu (" +
+        String(currentAccountMode) +
+        "). Aucune opération de base de données n'est autorisée " +
+        "dans cet état."
+    );
 }
 
 // ======================================================
 // EXÉCUTION D'UNE FONCTION DU MOTEUR ACTIF
 // ======================================================
+//
+// - Retourne la Promise du moteur (les deux moteurs sont
+//   asynchrones). Aucune Promise intermédiaire ajoutée.
+// - Les arguments (dont operationId) sont transmis SANS
+//   modification.
 
 function executeDatabaseFunction(functionName, args) {
 
