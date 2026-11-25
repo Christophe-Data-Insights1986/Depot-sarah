@@ -1,6 +1,36 @@
 // ======================================================
 // DÉPÔT SARAH V2
-// AUTH.JS — AUTHENTIFICATION ET GESTION DES RÔLES
+// AUTH.JS — AUTHENTIFICATION, AUTORISATIONS ET MODES DE COMPTE
+// VERSION DÉFINITIVE (LEGACY + reconnaissance TENANT)
+// ======================================================
+//
+// RÔLES DE CE FICHIER :
+//   - Authentification Firebase (email, Google, inscription).
+//   - Vérification des autorisations :
+//       * LEGACY via la collection authorizedUsers ;
+//       * TENANT via users/{uid} + tenants/{tid}/members/{uid}.
+//   - Émission des événements sarah-auth-ready / sarah-auth-logged-out.
+//   - Fixation du MODE DE COMPTE (legacy / tenant) via
+//     setCurrentAccountMode(), appelée par app.js.
+//
+// CE QUE CE FICHIER NE FAIT PAS (APPROCHE A) :
+//   - Il n'active JAMAIS le mode TENANT automatiquement.
+//   - Il n'importe PAS tenant-context.js.
+//   - setCurrentAccountMode N'EST PAS une preuve d'autorisation.
+//     La sécurité réelle est portée par les règles Firestore.
+//
+// STRUCTURE FIRESTORE UTILISÉE :
+//   authorizedUsers/{uid}                     → { status, approved, role }
+//   userRequests/{uid}                        → { status }
+//   users/{uid}                               → { activeTenantId }
+//   tenants/{tenantId}/members/{uid}          → { role, status, permissions }
+//   tenants/{tenantId}                        → { … infos dépôt }
+//
+// MODE DE COMPTE (currentAccountMode) :
+//   null     : personne de connecté, ou accès non autorisé.
+//   "legacy" : compte autorisé sur l'ancien dépôt.
+//   "tenant" : compte TENANT, activé par app.js après
+//              loadTenantContext() réussi + setCurrentAccountMode().
 // ======================================================
 
 import { auth, db, googleProvider } from "./firebase.js";
@@ -27,10 +57,84 @@ import {
 
 export const ADMIN_EMAIL = "christopheatangana2@gmail.com";
 
+export const ACCOUNT_MODES = Object.freeze({
+    LEGACY: "legacy",
+    TENANT: "tenant"
+});
+
+export const ACCOUNT_ROLES = Object.freeze({
+    ADMIN: "admin",
+    OPERATOR: "operator",
+    OWNER: "owner",
+    EMPLOYEE: "employee"
+});
+
+const LEGACY_ROLES = [ACCOUNT_ROLES.ADMIN, ACCOUNT_ROLES.OPERATOR];
+const TENANT_ROLES = [ACCOUNT_ROLES.OWNER, ACCOUNT_ROLES.EMPLOYEE];
+
 export let currentAccessUser = null;
 export let currentUserRole = null;
+export let currentAccountMode = null;
 
 let authInitialized = false;
+let authRun = 0;
+
+// ======================================================
+// MODE DE COMPTE
+// ======================================================
+
+export function setCurrentAccountMode(mode, role = null) {
+
+    const user = auth.currentUser;
+
+    if (!user) {
+        throw new Error(
+            "Aucun compte connecté : le mode de compte ne peut pas être modifié."
+        );
+    }
+
+    if (mode === ACCOUNT_MODES.TENANT) {
+
+        if (!TENANT_ROLES.includes(role)) {
+            throw new Error(
+                "Un rôle de dépôt valide (owner ou employee) est requis " +
+                "pour le mode tenant."
+            );
+        }
+
+        currentAccessUser = user;
+        currentUserRole = role;
+        currentAccountMode = ACCOUNT_MODES.TENANT;
+
+        return currentAccountMode;
+    }
+
+    if (mode === ACCOUNT_MODES.LEGACY) {
+
+        const legacyRole = role || currentUserRole;
+
+        if (!LEGACY_ROLES.includes(legacyRole)) {
+            throw new Error(
+                "Le mode legacy exige un compte déjà autorisé sur " +
+                "l'ancien dépôt."
+            );
+        }
+
+        currentAccessUser = user;
+        currentUserRole = legacyRole;
+        currentAccountMode = ACCOUNT_MODES.LEGACY;
+
+        return currentAccountMode;
+    }
+
+    throw new Error("Mode de compte inconnu : " + mode);
+}
+
+function resetSessionState() {
+    currentAccessUser = null;
+    currentUserRole = null;
+    currentAccountMode = null;
+}
 
 // ======================================================
 // IDENTIFICATION DES RÔLES
@@ -45,77 +149,146 @@ export function isAdmin(user = auth.currentUser) {
 }
 
 export function isOperator() {
-    return currentUserRole === "operator";
+    return currentUserRole === ACCOUNT_ROLES.OPERATOR;
 }
 
 export function hasAdminAccess() {
-    return currentUserRole === "admin";
+    return currentUserRole === ACCOUNT_ROLES.ADMIN;
 }
 
 // ======================================================
 // VÉRIFICATION DES AUTORISATIONS
 // ======================================================
 
+// Retourne true si le document authorizedUsers indique un accès approuvé.
+// Règle : un statut explicite prime TOUJOURS sur `approved`.
+// Compatibilité : documents anciens sans `status` mais avec `approved: true`.
+function isLegacyApproved(data) {
+    if (!data || typeof data !== "object") return false;
+
+    if (typeof data.status === "string" && data.status.trim()) {
+        return data.status === "approved";
+    }
+
+    return data.approved === true;
+}
+
+async function checkTenantAccess(user) {
+
+    let userSnap;
+    try {
+        userSnap = await getDoc(doc(db, "users", user.uid));
+    } catch (error) {
+        throw error;
+    }
+
+    if (!userSnap.exists()) return null;
+
+    const userData = userSnap.data();
+    const activeTenantId = userData?.activeTenantId;
+
+    if (
+        !activeTenantId ||
+        typeof activeTenantId !== "string" ||
+        !activeTenantId.trim()
+    ) {
+        return null;
+    }
+
+    let memberSnap;
+    try {
+        memberSnap = await getDoc(
+            doc(db, "tenants", activeTenantId, "members", user.uid)
+        );
+    } catch (error) {
+        throw error;
+    }
+
+    if (!memberSnap.exists()) return null;
+
+    const memberData = memberSnap.data();
+
+    if (memberData?.status !== "active") return null;
+
+    const tenantRole = memberData?.role;
+
+    if (!TENANT_ROLES.includes(tenantRole)) return null;
+
+    return {
+        approved: true,
+        role: tenantRole,
+        source: "tenant",
+        tenantId: activeTenantId
+    };
+}
+
 export async function checkUserAccess(user) {
 
     if (!user) {
-        return {
-            approved: false,
-            role: null
-        };
+        return { approved: false, role: null, source: null };
     }
 
+    // Étape 1 : admin LEGACY
     if (isAdmin(user)) {
 
-        await setDoc(
-            doc(db, "authorizedUsers", user.uid),
-            {
-                uid: user.uid,
-                email: user.email,
-                name: user.displayName || "Administrateur",
-                status: "approved",
-                approved: true,
-                role: "admin",
-                updatedAt: serverTimestamp()
-            },
-            { merge: true }
-        );
+        if (typeof navigator === "undefined" || navigator.onLine !== false) {
+            setDoc(
+                doc(db, "authorizedUsers", user.uid),
+                {
+                    uid: user.uid,
+                    email: user.email,
+                    name: user.displayName || "Administrateur",
+                    status: "approved",
+                    approved: true,
+                    role: "admin",
+                    updatedAt: serverTimestamp()
+                },
+                { merge: true }
+            ).catch(error => {
+                console.warn(
+                    "Profil administrateur non mis à jour :",
+                    error
+                );
+            });
+        }
 
         return {
             approved: true,
-            role: "admin"
+            role: ACCOUNT_ROLES.ADMIN,
+            source: "admin-email"
         };
     }
 
-    const userRef = doc(db, "authorizedUsers", user.uid);
-    const userSnap = await getDoc(userRef);
-
-    if (!userSnap.exists()) {
-        return {
-            approved: false,
-            role: null
-        };
+    // Étape 2 : authorizedUsers (LEGACY)
+    let legacySnap;
+    try {
+        legacySnap = await getDoc(doc(db, "authorizedUsers", user.uid));
+    } catch (error) {
+        throw error;
     }
 
-    const data = userSnap.data();
+    if (legacySnap.exists()) {
+        const data = legacySnap.data();
 
-    const approved =
-        data.status === "approved" ||
-        data.approved === true;
+        if (isLegacyApproved(data)) {
+            return {
+                approved: true,
+                role: ACCOUNT_ROLES.OPERATOR,
+                source: "legacy-approved"
+            };
+        }
 
-    if (!approved) {
-        return {
-            approved: false,
-            role: null
-        };
+        // Existe mais non approuvé → refus strict, sans chercher de tenant.
+        return { approved: false, role: null, source: null };
     }
 
-    // Tous les utilisateurs approuvés non administrateurs
-    // deviennent des opérateurs.
-    return {
-        approved: true,
-        role: "operator"
-    };
+    // Étape 3 : tentative TENANT (uniquement si pas d'entrée LEGACY)
+    const tenantResult = await checkTenantAccess(user);
+
+    if (tenantResult) return tenantResult;
+
+    // Étape 4 : refus
+    return { approved: false, role: null, source: null };
 }
 
 // ======================================================
@@ -124,32 +297,53 @@ export async function checkUserAccess(user) {
 
 async function createAccessRequest(user, name = "") {
 
-    if (!user) return false;
+    if (!user) return "pending";
 
     const requestRef = doc(db, "userRequests", user.uid);
-    const requestSnap = await getDoc(requestRef);
+
+    let requestSnap;
+    try {
+        requestSnap = await getDoc(requestRef);
+    } catch (error) {
+        console.warn("Lecture de la demande d'accès impossible :", error);
+        return "pending";
+    }
 
     if (requestSnap.exists()) {
         const data = requestSnap.data();
-
-        if (data.status === "approved") return true;
-        if (data.status === "pending") return false;
+        if (data.status === "approved") return "approved";
+        if (data.status === "rejected") return "rejected";
+        return "pending";
     }
 
-    await setDoc(requestRef, {
-        uid: user.uid,
-        email: user.email || "",
-        name: name || user.displayName || "",
-        status: "pending",
-        createdAt: serverTimestamp()
-    });
-
-    return false;
+    try {
+        await setDoc(requestRef, {
+            uid: user.uid,
+            email: user.email || "",
+            name: name || user.displayName || "",
+            status: "pending",
+            createdAt: serverTimestamp()
+        });
+        return "created";
+    } catch (error) {
+        if (error && error.code === "permission-denied") {
+            try {
+                const again = await getDoc(requestRef);
+                if (again.exists()) {
+                    const data = again.data();
+                    if (data.status === "approved") return "approved";
+                    if (data.status === "rejected") return "rejected";
+                    return "pending";
+                }
+            } catch (_) { /* noop */ }
+        }
+        console.warn("Création de la demande d'accès impossible :", error);
+        return "pending";
+    }
 }
 
 // ======================================================
-// APPROUVER UN UTILISATEUR
-// Réservé à l'administrateur
+// APPROUVER UN UTILISATEUR (LEGACY)
 // ======================================================
 
 export async function approveUser(uid, email, name = "") {
@@ -220,30 +414,35 @@ export async function registerWithEmail(name, email, password) {
 
     const user = credential.user;
 
-    await updateProfile(user, {
-        displayName: name
-    });
-
-    if (isAdmin(user)) {
-
-        await setDoc(
-            doc(db, "authorizedUsers", user.uid),
-            {
-                uid: user.uid,
-                email: user.email,
-                name,
-                status: "approved",
-                approved: true,
-                role: "admin",
-                createdAt: serverTimestamp()
-            },
-            { merge: true }
-        );
-
-    } else {
-
-        await createAccessRequest(user, name);
+    try {
+        await updateProfile(user, { displayName: name });
+    } catch (error) {
+        console.warn("Nom non enregistré dans le profil :", error);
     }
+
+    try {
+        if (isAdmin(user)) {
+            await setDoc(
+                doc(db, "authorizedUsers", user.uid),
+                {
+                    uid: user.uid,
+                    email: user.email,
+                    name,
+                    status: "approved",
+                    approved: true,
+                    role: "admin",
+                    createdAt: serverTimestamp()
+                },
+                { merge: true }
+            );
+        } else {
+            await createAccessRequest(user, name);
+        }
+    } catch (error) {
+        console.warn("Enregistrement initial incomplet :", error);
+    }
+
+    await handleAuthUser(user);
 
     return user;
 }
@@ -283,42 +482,45 @@ export async function loginWithGoogle() {
 
 export async function logoutUser() {
 
-    currentAccessUser = null;
-    currentUserRole = null;
+    resetSessionState();
 
     await signOut(auth);
-
-    showLoginScreen();
 }
 
 // ======================================================
-// AFFICHAGE DES ÉCRANS
+// AFFICHAGE DES ÉCRANS — uniformisé
 // ======================================================
+
+// Uniformise l'affichage : attribut hidden ET style.display.
+// `style.display = ""` laisse le CSS reprendre la main (plus
+// propre que forcer "block").
+function setVisible(element, visible) {
+    if (!element) return;
+    element.hidden = !visible;
+    element.style.display = visible ? "" : "none";
+}
 
 function showLoginScreen() {
 
     const login = document.getElementById("login-screen");
     const app = document.getElementById("app-container");
 
-    if (login) login.style.display = "block";
-    if (app) app.style.display = "none";
+    setVisible(login, true);
+    setVisible(app, false);
 }
 
-function showPendingScreen() {
+function showPendingScreen(message) {
 
-    const login = document.getElementById("login-screen");
-    const app = document.getElementById("app-container");
+    showLoginScreen();
 
-    if (login) login.style.display = "block";
-    if (app) app.style.display = "none";
-
-    const message =
+    const element =
         document.getElementById("login-message") ||
         document.getElementById("auth-message");
 
-    if (message) {
-        message.textContent =
-            "Votre demande d'accès est en attente de validation par l'administrateur.";
+    if (element) {
+        element.textContent = message ||
+            "Votre demande d'accès est en attente de validation " +
+            "par l'administrateur.";
     }
 }
 
@@ -327,8 +529,8 @@ function showApplicationScreen(user, role) {
     const login = document.getElementById("login-screen");
     const app = document.getElementById("app-container");
 
-    if (login) login.style.display = "none";
-    if (app) app.style.display = "block";
+    setVisible(login, false);
+    setVisible(app, true);
 
     const currentUserElement =
         document.getElementById("current-user");
@@ -337,18 +539,31 @@ function showApplicationScreen(user, role) {
 
         const name = user.displayName || user.email || "Utilisateur";
 
-        currentUserElement.textContent =
-            role === "admin"
-                ? `${name} (Administrateur)`
-                : `${name} (Opérateur)`;
+        let roleLabel = "Utilisateur";
+        if (role === ACCOUNT_ROLES.ADMIN) roleLabel = "Administrateur";
+        else if (role === ACCOUNT_ROLES.OPERATOR) roleLabel = "Opérateur";
+        else if (role === ACCOUNT_ROLES.OWNER) roleLabel = "Propriétaire";
+        else if (role === ACCOUNT_ROLES.EMPLOYEE) roleLabel = "Employé";
+
+        currentUserElement.textContent = `${name} (${roleLabel})`;
     }
+
+    // On émet accountMode "legacy" par défaut, MÊME pour un
+    // rôle owner/employee. C'est app.js qui, après
+    // loadTenantContext() réussi, appellera
+    // setCurrentAccountMode("tenant", role) pour activer le mode tenant.
+    const accountModeAtEmit =
+        currentAccountMode === ACCOUNT_MODES.TENANT
+            ? ACCOUNT_MODES.TENANT
+            : ACCOUNT_MODES.LEGACY;
 
     window.dispatchEvent(
         new CustomEvent("sarah-auth-ready", {
             detail: {
                 user,
-                isAdmin: role === "admin",
-                role
+                isAdmin: role === ACCOUNT_ROLES.ADMIN,
+                role,
+                accountMode: accountModeAtEmit
             }
         })
     );
@@ -358,30 +573,128 @@ function showApplicationScreen(user, role) {
 // MESSAGES D'ERREUR
 // ======================================================
 
+const AUTH_ERROR_MESSAGES = {
+    "auth/invalid-email": "Adresse e-mail invalide.",
+    "auth/user-not-found": "Aucun compte correspondant.",
+    "auth/wrong-password": "Mot de passe incorrect.",
+    "auth/invalid-credential": "Identifiants incorrects.",
+    "auth/email-already-in-use": "Cette adresse e-mail est déjà utilisée.",
+    "auth/weak-password": "Le mot de passe doit contenir au moins 6 caractères.",
+    "auth/popup-closed-by-user": "Connexion Google annulée.",
+    "auth/cancelled-popup-request": "Connexion Google annulée.",
+    "auth/popup-blocked":
+        "Le navigateur a bloqué la fenêtre Google. Autorisez-la puis réessayez.",
+    "auth/network-request-failed": "Connexion Internet indisponible.",
+    "auth/too-many-requests": "Trop de tentatives. Patientez quelques minutes.",
+    "auth/user-disabled": "Ce compte a été désactivé.",
+    "auth/operation-not-allowed": "Cette méthode de connexion n'est pas activée.",
+    "auth/unauthorized-domain":
+        "Ce site n'est pas autorisé pour la connexion Firebase.",
+    "auth/account-exists-with-different-credential":
+        "Un compte existe déjà avec cette adresse, avec un autre mode de connexion.",
+    "permission-denied": "Accès refusé par le serveur.",
+    "unavailable": "Service momentanément indisponible. Réessayez.",
+    "deadline-exceeded": "Le serveur met trop de temps à répondre. Réessayez."
+};
+
 function showAuthError(error) {
 
     console.error("Erreur authentification :", error);
 
-    const message =
+    const element =
         document.getElementById("login-message") ||
         document.getElementById("auth-message");
 
-    if (!message) return;
+    if (!element) return;
 
-    const messages = {
-        "auth/invalid-email": "Adresse e-mail invalide.",
-        "auth/user-not-found": "Aucun compte correspondant.",
-        "auth/wrong-password": "Mot de passe incorrect.",
-        "auth/invalid-credential": "Identifiants incorrects.",
-        "auth/email-already-in-use": "Cette adresse e-mail est déjà utilisée.",
-        "auth/weak-password": "Le mot de passe doit contenir au moins 6 caractères.",
-        "auth/popup-closed-by-user": "Connexion Google annulée."
-    };
-
-    message.textContent =
-        messages[error.code] ||
-        error.message ||
+    element.textContent =
+        AUTH_ERROR_MESSAGES[error?.code] ||
+        error?.message ||
         "Une erreur est survenue.";
+}
+
+// ======================================================
+// TRAITEMENT D'UN UTILISATEUR CONNECTÉ OU DÉCONNECTÉ
+// ======================================================
+
+async function handleAuthUser(user) {
+
+    const run = ++authRun;
+
+    if (!user) {
+
+        resetSessionState();
+        showLoginScreen();
+
+        window.dispatchEvent(
+            new CustomEvent("sarah-auth-logged-out")
+        );
+
+        return;
+    }
+
+    if (
+        currentAccessUser &&
+        currentAccessUser.uid !== user.uid
+    ) {
+        resetSessionState();
+
+        window.dispatchEvent(
+            new CustomEvent("sarah-auth-logged-out")
+        );
+    }
+
+    try {
+
+        const access = await checkUserAccess(user);
+
+        if (run !== authRun) return;
+
+        if (!access.approved) {
+
+            resetSessionState();
+
+            const status = await createAccessRequest(user);
+
+            if (run !== authRun) return;
+
+            if (status === "rejected") {
+                showPendingScreen(
+                    "Votre demande d'accès a été refusée par l'administrateur."
+                );
+            } else if (status === "approved") {
+                await handleAuthUser(user);
+                return;
+            } else {
+                showPendingScreen(
+                    "Votre demande d'accès est en attente de validation " +
+                    "par l'administrateur."
+                );
+            }
+
+            return;
+        }
+
+        currentAccessUser = user;
+        currentUserRole = access.role;
+
+        // Ne PAS écraser un mode TENANT déjà actif.
+        if (currentAccountMode !== ACCOUNT_MODES.TENANT) {
+            currentAccountMode = ACCOUNT_MODES.LEGACY;
+        }
+
+        showApplicationScreen(user, access.role);
+
+    } catch (error) {
+
+        if (run !== authRun) return;
+
+        console.error("Erreur de vérification des accès :", error);
+
+        resetSessionState();
+        showLoginScreen();
+        showAuthError(error);
+    }
 }
 
 // ======================================================
@@ -395,52 +708,7 @@ export function initAuth() {
     authInitialized = true;
 
     onAuthStateChanged(auth, async (user) => {
-
-        if (!user) {
-
-            currentAccessUser = null;
-            currentUserRole = null;
-
-            showLoginScreen();
-
-            window.dispatchEvent(
-                new CustomEvent("sarah-auth-logged-out")
-            );
-
-            return;
-        }
-
-        try {
-
-            const access = await checkUserAccess(user);
-
-            if (!access.approved) {
-
-                currentAccessUser = null;
-                currentUserRole = null;
-
-                await createAccessRequest(user);
-
-                showPendingScreen();
-
-                return;
-            }
-
-            currentAccessUser = user;
-            currentUserRole = access.role;
-
-            showApplicationScreen(user, access.role);
-
-        } catch (error) {
-
-            console.error(
-                "Erreur de vérification des accès :",
-                error
-            );
-
-            showLoginScreen();
-            showAuthError(error);
-        }
+        await handleAuthUser(user);
     });
 }
 
@@ -448,112 +716,112 @@ export function initAuth() {
 // FORMULAIRES ET BOUTONS
 // ======================================================
 
+const busyActions = {
+    login: false,
+    register: false,
+    google: false,
+    logout: false
+};
+
+async function runExclusive(key, button, action) {
+
+    if (busyActions[key]) return;
+
+    busyActions[key] = true;
+
+    if (button) button.disabled = true;
+
+    try {
+        await action();
+    } catch (error) {
+        showAuthError(error);
+    } finally {
+        busyActions[key] = false;
+        if (button) button.disabled = false;
+    }
+}
+
 function initializeAuthForms() {
 
     const loginForm = document.getElementById("login-form");
 
     if (loginForm) {
-
         loginForm.addEventListener("submit", async (event) => {
-
             event.preventDefault();
 
             const email =
                 document.getElementById("login-email")?.value.trim();
-
             const password =
                 document.getElementById("login-password")?.value;
 
-            try {
-
-                await loginWithEmail(email, password);
-
-            } catch (error) {
-
-                showAuthError(error);
-            }
+            await runExclusive(
+                "login",
+                loginForm.querySelector('button[type="submit"]'),
+                () => loginWithEmail(email, password)
+            );
         });
     }
 
     const registerForm = document.getElementById("register-form");
 
     if (registerForm) {
-
         registerForm.addEventListener("submit", async (event) => {
-
             event.preventDefault();
 
             const name =
                 document.getElementById("register-name")?.value.trim();
-
             const email =
                 document.getElementById("register-email")?.value.trim();
-
             const password =
                 document.getElementById("register-password")?.value;
 
-            try {
-
-                await registerWithEmail(name, email, password);
-
-            } catch (error) {
-
-                showAuthError(error);
-            }
+            await runExclusive(
+                "register",
+                registerForm.querySelector('button[type="submit"]'),
+                () => registerWithEmail(name, email, password)
+            );
         });
     }
 
-    const googleButton =
-        document.getElementById("google-login");
+    const googleButton = document.getElementById("google-login");
 
     if (googleButton) {
-
         googleButton.addEventListener("click", async () => {
-
-            try {
-
-                await loginWithGoogle();
-
-            } catch (error) {
-
-                showAuthError(error);
-            }
+            await runExclusive(
+                "google",
+                googleButton,
+                () => loginWithGoogle()
+            );
         });
     }
 
-    const logoutButton =
-        document.getElementById("logout-button");
+    const logoutButton = document.getElementById("logout-button");
 
     if (logoutButton) {
-
         logoutButton.addEventListener("click", async () => {
-
-            try {
-
-                await logoutUser();
-
-            } catch (error) {
-
-                showAuthError(error);
-            }
+            await runExclusive(
+                "logout",
+                logoutButton,
+                () => logoutUser()
+            );
         });
     }
 
-    const showRegisterButton =
-        document.getElementById("show-register");
+    const showRegisterButton = document.getElementById("show-register");
 
     if (showRegisterButton) {
-
         showRegisterButton.addEventListener("click", () => {
+            const loginForm = document.getElementById("login-form");
+            const registerForm = document.getElementById("register-form");
 
-            const loginForm =
-                document.getElementById("login-form");
+            if (!loginForm || !registerForm) return;
 
-            const registerForm =
-                document.getElementById("register-form");
+            // Si le formulaire d'inscription est actuellement caché,
+            // on le montre (et on cache le login), et inversement.
+            const registerHidden = registerForm.hidden;
 
-            if (loginForm) loginForm.style.display = "none";
-            if (registerForm) registerForm.style.display = "block";
+            setVisible(registerForm, registerHidden);
+            setVisible(loginForm, !registerHidden);
         });
     }
 }
